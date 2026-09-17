@@ -5,9 +5,9 @@
 | # | Chunk | Status | Objective |
 |---|---|---|---|
 | 1 | `chore/scaffold` | **Committed** (`88c7686`) | [go.mod](file:///home/tylerkilburn/Git/lazytask/go.mod), [cmd/lazytask/main.go](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main.go), minimal Bubble Tea [`model`](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main.go#L9-L11), [README.md](file:///home/tylerkilburn/Git/lazytask/README.md), [.gitignore](file:///home/tylerkilburn/Git/lazytask/.gitignore). |
-| 2 | `internal/taskwarrior/client` | **Completed** (Awaiting Commit) | Thin wrapper around `task export` returning parsed `[]Task` (JSON decode only). Unit + integration tests. No UI. |
-| 3 | `internal/taskwarrior/mutations` | **Completed** | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI. |
-| 4 | `internal/ui/tasklist` | Planned | Bubble Tea model rendering task list panel (fixture-driven), lazygit-style bordered pane, selection navigation. No live taskwarrior wiring. |
+| 2 | `internal/taskwarrior/client` | **Committed** (`3015c2b`) | Thin wrapper around `task export` returning parsed `[]Task` (JSON decode only). Unit + integration tests. No UI. |
+| 3 | `internal/taskwarrior/mutations` | **Committed** (`aa950b5`) | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI. |
+| 4 | `internal/ui/tasklist` | **In Progress** | Bubble Tea model rendering task list panel (fixture-driven), lazygit-style bordered pane, selection navigation. No live taskwarrior wiring. |
 | 5 | `wire: list panel to real data` | Planned | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh. |
 | 6 | `internal/ui/addform` | Planned | Input panel for new task description, wired to chunk 3 `Add`. |
 | 7 | `feature: complete/delete` | Planned | Keybindings (`d` done, `x` delete + confirm) wired to chunk 3. |
@@ -70,12 +70,29 @@
     task export status:completed                       # confirm it shows completed
     ```
 
+### Chunk 4: `internal/ui/tasklist`
+- **Objective**: Bubble Tea model rendering the task list panel (static data / fixture-driven), lazygit-style bordered pane, up/down selection. No live taskwarrior wiring yet.
+- **Files Created**:
+  - [internal/ui/tasklist/model.go](file:///home/tylerkilburn/Git/lazytask/internal/ui/tasklist/model.go): `Model` (Bubble Tea model) holding `[]taskwarrior.Task` + cursor + size; `New`, `SetTasks`, `Selected`, `Init`, `Update` (up/down/j/k navigation, clamped at bounds; handles `tea.WindowSizeMsg`), `View` (Lip Gloss `RoundedBorder` pane, fixed-width columns for ID/Description/Project/Priority/Due, reverse-video highlight on the selected row).
+  - [internal/ui/tasklist/model_test.go](file:///home/tylerkilburn/Git/lazytask/internal/ui/tasklist/model_test.go): table-driven tests for navigation (up/down/j/k, clamping at both ends), `SetTasks` cursor clamping, and `View` content checks.
+  - [internal/ui/tasklist/example_test.go](file:///home/tylerkilburn/Git/lazytask/internal/ui/tasklist/example_test.go): runnable `Example` demonstrating construction with fixture tasks and initial selection.
+  - [cmd/tasklist-demo/main.go](file:///home/tylerkilburn/Git/lazytask/cmd/tasklist-demo/main.go): throwaway manual-QA harness — runs the `tasklist.Model` standalone against fixture data so a human can visually verify the bordered pane and navigation without any taskwarrior wiring.
+- **Files Changed**:
+  - [go.mod](file:///home/tylerkilburn/Git/lazytask/go.mod): promoted `github.com/charmbracelet/lipgloss` (already in the dependency tree, per requirements.md §2) from indirect to direct — no new third-party dependency added.
+- **Verification**:
+  - `go build ./...` succeeded.
+  - `go vet ./...` succeeded.
+  - `go test ./...` passed (all packages, including new `internal/ui/tasklist` unit tests and the `Example`).
+- **Manual QA**:
+  - Run `go run ./cmd/tasklist-demo`.
+  - Confirm a bordered pane titled "Tasks" appears with 4 fixture rows (Buy groceries, Write quarterly report, Water plants, Fix leaky faucet) and column headers ID/Description/Project/Priority/Due.
+  - Press `down`/`j` and `up`/`k` — confirm the highlighted (reverse-video) row moves accordingly and stops at the first/last row instead of wrapping.
+  - Press `q` or `ctrl+c` to quit cleanly.
+- **Notes**: Reuses `taskwarrior.Task` (from chunk 2) as the row data type rather than defining a duplicate UI-local struct, since chunk 5 will need to feed real `[]taskwarrior.Task` into this same `Model`. No taskwarrior process is invoked anywhere in this package or the demo — fixture data only. `cmd/tasklist-demo` is intentionally separate from `cmd/lazytask/main.go`, which chunk 5 will wire up for real.
+
 ---
 
 ## Up Next
 
-### Chunk 4: `internal/ui/tasklist`
-- **Objective**: Bubble Tea model rendering the task list panel (static data / fixture-driven), lazygit-style bordered pane, up/down selection. No live taskwarrior wiring yet.
-- **Rules & Guardrails**:
-  - Do not wire in the real taskwarrior client in Chunk 4 (fixture/static data only).
-  - Bounded diff: ~150–250 lines changed, <= 4–6 files.
+### Chunk 5: `wire: list panel to real data`
+- **Objective**: Connect chunk 2's client to chunk 4's panel on startup; a `r` key refresh.
