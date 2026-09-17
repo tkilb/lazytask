@@ -8,7 +8,7 @@
 | 2 | `internal/taskwarrior/client` | **Committed** (`3015c2b`) | Thin wrapper around `task export` returning parsed `[]Task` (JSON decode only). Unit + integration tests. No UI. |
 | 3 | `internal/taskwarrior/mutations` | **Committed** (`aa950b5`) | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI. |
 | 4 | `internal/ui/tasklist` | **In Progress** | Bubble Tea model rendering task list panel (fixture-driven), lazygit-style bordered pane, selection navigation. No live taskwarrior wiring. |
-| 5 | `wire: list panel to real data` | Planned | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh. |
+| 5 | `wire: list panel to real data` | **Committed** | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh. |
 | 6 | `internal/ui/addform` | Planned | Input panel for new task description, wired to chunk 3 `Add`. |
 | 7 | `feature: complete/delete` | Planned | Keybindings (`d` done, `x` delete + confirm) wired to chunk 3. |
 | 8 | `internal/editor` | Planned | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests. |
@@ -90,9 +90,26 @@
   - Press `q` or `ctrl+c` to quit cleanly.
 - **Notes**: Reuses `taskwarrior.Task` (from chunk 2) as the row data type rather than defining a duplicate UI-local struct, since chunk 5 will need to feed real `[]taskwarrior.Task` into this same `Model`. No taskwarrior process is invoked anywhere in this package or the demo — fixture data only. `cmd/tasklist-demo` is intentionally separate from `cmd/lazytask/main.go`, which chunk 5 will wire up for real.
 
+### Chunk 5: `wire: list panel to real data`
+- **Objective**: Connect chunk 2's `taskwarrior.Client` to chunk 4's `tasklist.Model` on startup in `cmd/lazytask/main.go`; a `r` key refresh.
+- **Files Changed**:
+  - [cmd/lazytask/main.go](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main.go): `model` now holds a `TaskReader` (small interface satisfied by `taskwarrior.Client`) and a `tasklist.Model`. `Init` dispatches a `fetchTasks` command running `Export(ctx, "status:pending")`. New `tasksLoadedMsg`/`tasksErrMsg` results feed the list or store an error. `r` re-triggers the fetch; other key/window messages are forwarded to `tasklist.Model.Update`. `View` renders the panel, an error line (if any), and a `(r) refresh  (q) quit` hint.
+  - [cmd/lazytask/main_test.go](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main_test.go): rewritten with a `stubReader` test double (no real `task` process invoked) covering `Init` fetch dispatch, `tasksLoadedMsg`/`tasksErrMsg` handling, `r`-triggered refresh, quit behavior, and view rendering (quitting/error/hint).
+- **Verification**:
+  - `go build ./...` succeeded.
+  - `go vet ./...` succeeded.
+  - `go test ./...` passed (all packages).
+- **Manual QA**:
+  - Run `go run ./cmd/lazytask` against a real (or sandboxed `TASKDATA`/`TASKRC`) taskwarrior install with pending tasks.
+  - Confirm the "Tasks" panel shows real pending tasks, not fixtures.
+  - Add/complete a task in another terminal, press `r` in the app, confirm the list refreshes.
+  - If `task` is missing/misconfigured, confirm an `error loading tasks: ...` line appears instead of a crash.
+  - Press `q`/`ctrl+c` to quit cleanly.
+- **Status**: Verified working by user; commit pending (user commits per standing instructions).
+
 ---
 
 ## Up Next
 
-### Chunk 5: `wire: list panel to real data`
-- **Objective**: Connect chunk 2's client to chunk 4's panel on startup; a `r` key refresh.
+### Chunk 6: `internal/ui/addform`
+- **Objective**: Input panel for new task description, wired to chunk 3's `Add`.
