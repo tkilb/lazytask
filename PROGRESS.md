@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 | `chore/scaffold` | **Committed** (`88c7686`) | [go.mod](file:///home/tylerkilburn/Git/lazytask/go.mod), [cmd/lazytask/main.go](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main.go), minimal Bubble Tea [`model`](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main.go#L9-L11), [README.md](file:///home/tylerkilburn/Git/lazytask/README.md), [.gitignore](file:///home/tylerkilburn/Git/lazytask/.gitignore). |
 | 2 | `internal/taskwarrior/client` | **Completed** (Awaiting Commit) | Thin wrapper around `task export` returning parsed `[]Task` (JSON decode only). Unit + integration tests. No UI. |
-| 3 | `internal/taskwarrior/mutations` | Planned (Next) | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI. |
+| 3 | `internal/taskwarrior/mutations` | **Completed** | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI. |
 | 4 | `internal/ui/tasklist` | Planned | Bubble Tea model rendering task list panel (fixture-driven), lazygit-style bordered pane, selection navigation. No live taskwarrior wiring. |
 | 5 | `wire: list panel to real data` | Planned | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh. |
 | 6 | `internal/ui/addform` | Planned | Input panel for new task description, wired to chunk 3 `Add`. |
@@ -49,13 +49,33 @@
   - Run `go test -v -run TestClient_Export_Integration ./internal/taskwarrior`.
   - Confirm test runs against isolated temporary directory and passes.
 
+### Chunk 3: `internal/taskwarrior/mutations`
+- **Objective**: `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI.
+- **Files Created**:
+  - [internal/taskwarrior/mutations.go](file:///home/tylerkilburn/Git/lazytask/internal/taskwarrior/mutations.go): `TaskMutator` interface, shared `Client.run` helper, and `Client.Add`/`Client.Done`/`Client.Delete` methods wrapping `task add`/`done`/`delete` (via `rc.confirmation=off`), parsing the created task ID from Taskwarrior's "Created task N." output.
+  - [internal/taskwarrior/mutations_test.go](file:///home/tylerkilburn/Git/lazytask/internal/taskwarrior/mutations_test.go): Unit tests for created-task-ID regexp parsing, invalid binary, and empty-ID validation, plus `TestClient_Mutations_Integration` exercising add/done/delete against an isolated `TASKDATA`/`TASKRC` temp directory (deletes by UUID to avoid pending-ID renumbering after a completion).
+- **Verification**:
+  - `go build ./...` succeeded.
+  - `go vet ./...` succeeded.
+  - `go test ./...` passed (all unit and integration tests passed).
+- **Manual QA**:
+  - Run `go test -v -run TestClient_Mutations_Integration ./internal/taskwarrior`.
+  - Or exercise the real CLI by hand in a sandbox:
+    ```bash
+    export TASKDATA=$(mktemp -d)
+    export TASKRC=$TASKDATA/.taskrc
+    echo "confirmation=off" > "$TASKRC"
+    task add "Buy groceries" project:Home priority:H   # "Created task 1."
+    task 1 done
+    task export status:completed                       # confirm it shows completed
+    ```
+
 ---
 
 ## Up Next
 
-### Chunk 3: `internal/taskwarrior/mutations`
-- **Objective**: `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI.
+### Chunk 4: `internal/ui/tasklist`
+- **Objective**: Bubble Tea model rendering the task list panel (static data / fixture-driven), lazygit-style bordered pane, up/down selection. No live taskwarrior wiring yet.
 - **Rules & Guardrails**:
-  - Do not build UI in Chunk 3.
-  - Integration tests must isolate taskwarrior via temporary `TASKDATA` and `TASKRC` environment variables.
+  - Do not wire in the real taskwarrior client in Chunk 4 (fixture/static data only).
   - Bounded diff: ~150–250 lines changed, <= 4–6 files.
