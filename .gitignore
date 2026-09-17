@@ -1,0 +1,18 @@
+# Binaries
+bin/
+dist/
+/lazytask
+
+# Test binary
+*.test
+*.out
+
+# Go workspace
+go.work
+
+# IDE and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
