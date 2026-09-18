@@ -13,7 +13,8 @@
 | 7   | `feature: complete/delete`       | **Committed**             | Keybindings (`d` done, `x` delete + confirm) wired to chunk 3.                                                                                                                                                                                                                                                                                                                  |
 | 8   | `internal/editor`                | **Committed** (`5933879`) | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests.                                                                                                                                                                                                                                                                                             |
 | 9   | `feature: edit task`             | **Committed** (`a0690ff`) | Wire chunk 8 into task list (`e` key), re-import edited fields.                                                                                                                                                                                                                                                                                                                 |
-| 10  | `polish: status bar & help`      | Planned                   | Lazygit-style bottom bar showing active keybindings for current panel.                                                                                                                                                                                                                                                                                                          |
+| 10  | `feature: markdown edit buffer`  | Planned                   | Replace chunk 9's JSON edit buffer with a structured key/value plain-text buffer (editable fields + `---` divider + read-only reference fields) for the `$EDITOR` flow.                                                                                                                                                                                                       |
+| 11  | `polish: status bar & help`      | Planned                   | Lazygit-style bottom bar showing active keybindings for current panel.                                                                                                                                                                                                                                                                                                          |
 
 ---
 
@@ -38,7 +39,21 @@ message/diff in `git log` for full history. Key carried-forward decisions:
 
 ## Up Next
 
-### Chunk 10: `polish: status bar & help`
+### Chunk 10: `feature: markdown edit buffer`
+
+- **Objective**: Replace the JSON edit buffer introduced in chunk 9 with a
+  structured, human-friendly plain-text buffer for the `$EDITOR` edit flow
+  (see requirements.md §7, chunk 10 for the full field layout).
+- **Format**: key/value lines (`Field: value`), `Description` may span
+  multiple lines. Editable fields (`Description`, `Project`, `Priority`,
+  `Due`, `Tags`) appear first, followed by a `---` divider, followed by
+  read-only reference fields (`ID`, `UUID`, `Status`, `Entry`, `Modified`,
+  `End`, `Urgency`) shown for context but never re-imported.
+- **Needs**: parser + serializer with unit tests (round-trip, embedded
+  newlines, missing/blank fields, malformed input), swap-in for the
+  existing JSON marshal/unmarshal calls added in chunk 9.
+
+### Chunk 11: `polish: status bar & help`
 
 - **Objective**: Lazygit-style bottom bar showing active keybindings for the current panel.
 

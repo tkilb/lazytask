@@ -141,7 +141,36 @@ than a human would spend minutes:
    itself is not integration-testable headlessly).
 9. `feature: edit task` — wire chunk 8 into the task list (`e` key),
    re-import edited fields via taskwarrior client.
-10. `polish: status bar & help` — lazygit-style bottom bar showing active
+10. `feature: markdown edit buffer` — replace the JSON edit buffer from
+    chunk 9 with a structured, human-friendly plain-text buffer for the
+    `$EDITOR` edit flow. Buffer layout (key/value lines, `Description`
+    allows embedded newlines):
+
+    ```
+    Description: <text, may span multiple lines>
+    Project: <text>
+    Priority: <text>
+    Due: <text>
+    Tags: tag1, tag2
+    ---
+    ID: <int>
+    UUID: <string>
+    Status: <string>
+    Entry: <string>
+    Modified: <string>
+    End: <string>
+    Urgency: <float>
+    ```
+
+    Everything above the `---` divider is user-editable and re-imported on
+    save (`Description`, `Project`, `Priority`, `Due`, `Tags`). Everything
+    below the divider is read-only reference (system/taskwarrior-managed
+    fields) — parsed for display only, never written back, and any edits a
+    user makes there must be silently ignored on re-import (not treated as
+    an error). Parser/serializer for this format needs unit tests
+    (round-trip, embedded newlines in `Description`, missing/blank
+    optional fields, malformed input).
+11. `polish: status bar & help` — lazygit-style bottom bar showing active
     keybindings for the current panel.
 
 Each numbered item above is one chunk. Per Section 5, the driving agent must
