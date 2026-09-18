@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
@@ -39,6 +41,13 @@ type TaskDoner interface {
 // `task` binary.
 type TaskDeleter interface {
 	Delete(ctx context.Context, id string) error
+}
+
+// TaskImporter is the subset of the taskwarrior client needed to re-import
+// an edited task, so it can be stubbed out in tests without shelling out to
+// the real `task` binary.
+type TaskImporter interface {
+	Import(ctx context.Context, data []byte) error
 }
 
 // tasksLoadedMsg carries the result of a successful task fetch.
@@ -75,11 +84,21 @@ type taskDeleteErrMsg struct {
 	err error
 }
 
+// taskEditedMsg carries the result of a successful edit-and-reimport.
+type taskEditedMsg struct{}
+
+// taskEditErrMsg carries the error from a failed edit-and-reimport, whether
+// from the editor invocation itself, parsing its output, or re-importing.
+type taskEditErrMsg struct {
+	err error
+}
+
 type model struct {
 	reader   TaskReader
 	adder    TaskAdder
 	doner    TaskDoner
 	deleter  TaskDeleter
+	importer TaskImporter
 	list     tasklist.Model
 	add      addform.Model
 	adding   bool
@@ -91,12 +110,13 @@ type model struct {
 func initialModel() model {
 	client := taskwarrior.NewClient()
 	return model{
-		reader:  client,
-		adder:   client,
-		doner:   client,
-		deleter: client,
-		list:    tasklist.New(nil),
-		add:     addform.New(),
+		reader:   client,
+		adder:    client,
+		doner:    client,
+		deleter:  client,
+		importer: client,
+		list:     tasklist.New(nil),
+		add:      addform.New(),
 	}
 }
 
@@ -141,6 +161,60 @@ func deleteTask(deleter TaskDeleter, id string) tea.Cmd {
 	}
 }
 
+// editTask opens task in the user's $EDITOR (as JSON, similar in spirit to
+// `task <id> edit`), then re-imports the edited fields via importer once
+// the editor exits. It suspends the Bubble Tea program for the duration of
+// the editor invocation via tea.ExecProcess.
+func editTask(importer TaskImporter, task taskwarrior.Task) tea.Cmd {
+	content, err := json.MarshalIndent(task, "", "  ")
+	if err != nil {
+		return func() tea.Msg { return taskEditErrMsg{err: err} }
+	}
+
+	cmd, session, err := editor.Prepare(string(content))
+	if err != nil {
+		return func() tea.Msg { return taskEditErrMsg{err: err} }
+	}
+
+	return tea.ExecProcess(cmd, editTaskCallback(importer, session))
+}
+
+// editTaskCallback builds the tea.ExecCallback run once the editor process
+// launched by editTask exits: it reads back session's temp file, parses it
+// as a Task, and re-imports it via importer. Split out from editTask so it
+// can be unit-tested without going through tea.ExecProcess/a real editor
+// process.
+func editTaskCallback(importer TaskImporter, session *editor.Session) func(error) tea.Msg {
+	return func(err error) tea.Msg {
+		defer session.Close()
+		if err != nil {
+			return taskEditErrMsg{err: fmt.Errorf("running editor: %w", err)}
+		}
+
+		edited, err := session.Read()
+		if err != nil {
+			return taskEditErrMsg{err: err}
+		}
+
+		var updated taskwarrior.Task
+		if err := json.Unmarshal([]byte(edited), &updated); err != nil {
+			return taskEditErrMsg{err: fmt.Errorf("parsing edited task: %w", err)}
+		}
+		if strings.TrimSpace(updated.UUID) == "" {
+			return taskEditErrMsg{err: fmt.Errorf("edited task is missing its uuid; not importing")}
+		}
+
+		data, err := json.Marshal(updated)
+		if err != nil {
+			return taskEditErrMsg{err: err}
+		}
+		if err := importer.Import(context.Background(), data); err != nil {
+			return taskEditErrMsg{err: err}
+		}
+		return taskEditedMsg{}
+	}
+}
+
 func (m model) Init() tea.Cmd {
 	return fetchTasks(m.reader)
 }
@@ -178,6 +252,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleting = true
 			}
 			return m, nil
+		case "e":
+			m.err = nil
+			if task, ok := m.list.Selected(); ok {
+				return m, editTask(m.importer, task)
+			}
+			return m, nil
 		}
 	case tasksLoadedMsg:
 		m.err = nil
@@ -203,6 +283,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		return m, fetchTasks(m.reader)
 	case taskDeleteErrMsg:
+		m.err = msg.err
+		return m, nil
+	case taskEditedMsg:
+		m.err = nil
+		return m, fetchTasks(m.reader)
+	case taskEditErrMsg:
 		m.err = msg.err
 		return m, nil
 	}
@@ -288,12 +374,17 @@ func (m model) View() string {
 	if m.err != nil {
 		view += fmt.Sprintf("\nerror: %v\n", m.err)
 	}
-	view += "\n(a) add  (d) done  (x) delete  (r) refresh  (q) quit\n"
+	view += "\n(a) add  (d) done  (x) delete  (e) edit  (r) refresh  (q) quit\n"
 	return view
 }
 
 func main() {
-	p := tea.NewProgram(initialModel())
+	// Use the alternate screen so the program owns the full terminal
+	// buffer. Without it, resuming after an external process (e.g. the
+	// editor launched by the 'e' key, via tea.ExecProcess) just repaints
+	// the current view in place rather than clearing first, leaving old
+	// frames stacked above the live one.
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running lazytask: %v\n", err)
 		os.Exit(1)

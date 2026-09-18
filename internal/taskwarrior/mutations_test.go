@@ -2,6 +2,7 @@ package taskwarrior
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,19 @@ func TestClient_Delete_EmptyID(t *testing.T) {
 	err := c.Delete(context.Background(), "  ")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestClient_Import_EmptyData(t *testing.T) {
+	c := NewClient()
+	err := c.Import(context.Background(), []byte("   "))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestClient_Import_InvalidBinary(t *testing.T) {
+	c := NewClient(WithBinary("non_existent_binary_12345"))
+	err := c.Import(context.Background(), []byte(`{"description":"x"}`))
+	require.Error(t, err)
 }
 
 func TestClient_Mutations_Integration(t *testing.T) {
@@ -120,4 +134,21 @@ func TestClient_Mutations_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, deleted, 1)
 	assert.Equal(t, "Write docs", deleted[0].Description)
+
+	// 4. Import edited fields back onto the completed task, simulating a
+	// round trip through an external editor.
+	completed[0].Description = "Buy groceries and milk"
+	completed[0].Project = "Home"
+	data, err := json.Marshal(completed[0])
+	require.NoError(t, err)
+
+	err = client.Import(ctx, data)
+	require.NoError(t, err)
+
+	reimported, err := client.Export(ctx, "status:completed")
+	require.NoError(t, err)
+	require.Len(t, reimported, 1)
+	assert.Equal(t, "Buy groceries and milk", reimported[0].Description)
+	assert.Equal(t, "Home", reimported[0].Project)
+	assert.Equal(t, completed[0].UUID, reimported[0].UUID)
 }

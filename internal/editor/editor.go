@@ -43,6 +43,59 @@ func WithEnviron(env []string) Option {
 //
 // The temporary file is removed before Edit returns, regardless of outcome.
 func Edit(content string, opts ...Option) (string, error) {
+	cmd, session, err := Prepare(content, opts...)
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("running editor %q: %w", strings.Join(cmd.Args, " "), err)
+	}
+
+	return session.Read()
+}
+
+// Session represents an in-progress external editor invocation whose temp
+// file has been written but whose editor command has not necessarily been
+// run yet. It lets callers that must run the *exec.Cmd themselves (for
+// example a Bubble Tea program via tea.ExecProcess, which needs to suspend
+// its own terminal handling around the process) read back the result and
+// clean up afterward.
+type Session struct {
+	path string
+}
+
+// Read returns the current contents of the session's temp file. It is
+// intended to be called after the *exec.Cmd returned alongside this Session
+// by Prepare has finished running.
+func (s *Session) Read() (string, error) {
+	out, err := os.ReadFile(s.path)
+	if err != nil {
+		return "", fmt.Errorf("reading temp file: %w", err)
+	}
+	return string(out), nil
+}
+
+// Close removes the session's temp file. Safe to call even if the file was
+// already removed.
+func (s *Session) Close() error {
+	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing temp file: %w", err)
+	}
+	return nil
+}
+
+// Prepare writes content to a fresh temporary file and returns an *exec.Cmd
+// configured to open it in the resolved editor (see resolveEditor), along
+// with a Session for reading back the result once that command has been
+// run to completion. The caller owns running the returned *exec.Cmd and
+// must call Session.Close afterward to remove the temp file; Edit does all
+// of this itself for simpler, non-interactive callers.
+func Prepare(content string, opts ...Option) (*exec.Cmd, *Session, error) {
 	cfg := config{env: os.Environ()}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -50,39 +103,29 @@ func Edit(content string, opts ...Option) (string, error) {
 
 	editorCmd, err := resolveEditor(cfg)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
 
 	f, err := os.CreateTemp("", "lazytask-edit-*.txt")
 	if err != nil {
-		return "", fmt.Errorf("creating temp file: %w", err)
+		return nil, nil, fmt.Errorf("creating temp file: %w", err)
 	}
 	path := f.Name()
-	defer os.Remove(path)
 
 	if _, err := f.WriteString(content); err != nil {
 		f.Close()
-		return "", fmt.Errorf("writing temp file: %w", err)
+		os.Remove(path)
+		return nil, nil, fmt.Errorf("writing temp file: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("closing temp file: %w", err)
+		os.Remove(path)
+		return nil, nil, fmt.Errorf("closing temp file: %w", err)
 	}
 
 	args := append(append([]string{}, editorCmd[1:]...), path)
 	cmd := exec.Command(editorCmd[0], args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("running editor %q: %w", strings.Join(editorCmd, " "), err)
-	}
 
-	out, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("reading temp file: %w", err)
-	}
-
-	return string(out), nil
+	return cmd, &Session{path: path}, nil
 }
 
 // resolveEditor determines the editor command (and its arguments) to run,

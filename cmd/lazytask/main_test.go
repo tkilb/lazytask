@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
@@ -70,6 +72,18 @@ type stubDeleter struct {
 func (s *stubDeleter) Delete(ctx context.Context, id string) error {
 	s.call++
 	s.ids = append(s.ids, id)
+	return s.err
+}
+
+// stubImporter is a test double for TaskImporter, avoiding any real `task`
+// process invocation.
+type stubImporter struct {
+	err   error
+	calls [][]byte
+}
+
+func (s *stubImporter) Import(ctx context.Context, data []byte) error {
+	s.calls = append(s.calls, data)
 	return s.err
 }
 
@@ -165,7 +179,7 @@ func TestModelView(t *testing.T) {
 
 	t.Run("shows add/refresh/quit hint", func(t *testing.T) {
 		m := model{list: tasklist.New(nil)}
-		assert.Contains(t, m.View(), "(a) add  (d) done  (x) delete  (r) refresh  (q) quit")
+		assert.Contains(t, m.View(), "(a) add  (d) done  (x) delete  (e) edit  (r) refresh  (q) quit")
 	})
 
 	t.Run("shows delete confirmation prompt", func(t *testing.T) {
@@ -408,4 +422,116 @@ func TestModelUpdate_TaskDeleteErrMsgSetsErr(t *testing.T) {
 	m = newModel.(model)
 	assert.Equal(t, wantErr, m.err)
 	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_EKeyWithSelectionReturnsCmd(t *testing.T) {
+	// editTask creates a real temp file synchronously (via editor.Prepare)
+	// as soon as it's called, ahead of the returned tea.Cmd/tea.ExecProcess
+	// actually running the editor. Since this test never drives that
+	// process to completion (which is what normally cleans the file up),
+	// redirect temp file creation into a scratch dir so nothing leaks into
+	// the real OS temp dir.
+	t.Setenv("TMPDIR", t.TempDir())
+
+	m := model{
+		importer: &stubImporter{},
+		list:     tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}),
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	m = newModel.(model)
+	assert.Nil(t, m.err)
+	assert.NotNil(t, cmd)
+}
+
+func TestModelUpdate_EKeyNoSelectionNoOp(t *testing.T) {
+	m := model{importer: &stubImporter{}, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	m = newModel.(model)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_TaskEditedMsgTriggersRefresh(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
+	m := model{reader: reader, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(taskEditedMsg{})
+	m = newModel.(model)
+	assert.Nil(t, m.err)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	loaded, ok := msg.(tasksLoadedMsg)
+	assert.True(t, ok)
+	assert.Equal(t, reader.tasks, loaded.tasks)
+}
+
+func TestModelUpdate_TaskEditErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("edit failed")
+
+	newModel, cmd := m.Update(taskEditErrMsg{err: wantErr})
+	m = newModel.(model)
+	assert.Equal(t, wantErr, m.err)
+	assert.Nil(t, cmd)
+}
+
+func TestEditTaskCallback_ImportsEditedTask(t *testing.T) {
+	_, session, err := editor.Prepare(`{"uuid":"abc-123","description":"Buy milk and eggs","status":"pending"}`)
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session)(nil)
+
+	_, ok := msg.(taskEditedMsg)
+	assert.True(t, ok)
+	require.Len(t, importer.calls, 1)
+
+	var got taskwarrior.Task
+	require.NoError(t, json.Unmarshal(importer.calls[0], &got))
+	assert.Equal(t, "abc-123", got.UUID)
+	assert.Equal(t, "Buy milk and eggs", got.Description)
+}
+
+func TestEditTaskCallback_EditorErrorSkipsImport(t *testing.T) {
+	_, session, err := editor.Prepare(`{"uuid":"abc-123"}`)
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session)(errors.New("boom"))
+
+	errMsg, ok := msg.(taskEditErrMsg)
+	require.True(t, ok)
+	assert.Error(t, errMsg.err)
+	assert.Empty(t, importer.calls)
+}
+
+func TestEditTaskCallback_MissingUUIDSkipsImport(t *testing.T) {
+	_, session, err := editor.Prepare(`{"description":"no uuid here"}`)
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session)(nil)
+
+	errMsg, ok := msg.(taskEditErrMsg)
+	require.True(t, ok)
+	assert.Contains(t, errMsg.err.Error(), "uuid")
+	assert.Empty(t, importer.calls)
+}
+
+func TestEditTaskCallback_ImportErrSetsErrMsg(t *testing.T) {
+	_, session, err := editor.Prepare(`{"uuid":"abc-123"}`)
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{err: errors.New("import failed")}
+	msg := editTaskCallback(importer, session)(nil)
+
+	errMsg, ok := msg.(taskEditErrMsg)
+	require.True(t, ok)
+	assert.Contains(t, errMsg.err.Error(), "import failed")
 }

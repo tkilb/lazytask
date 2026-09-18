@@ -15,6 +15,7 @@ type TaskMutator interface {
 	Add(ctx context.Context, description string, extraArgs ...string) (int, error)
 	Done(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
+	Import(ctx context.Context, data []byte) error
 }
 
 // createdTaskRE matches Taskwarrior's "Created task <id>." confirmation line.
@@ -84,4 +85,33 @@ func (c *Client) Delete(ctx context.Context, id string) error {
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "delete")
 	return err
+}
+
+// Import runs `task import` with data (Taskwarrior export-format JSON,
+// either a single task object or an array of them) piped to stdin. A task
+// whose "uuid" field matches an existing task updates that task's fields in
+// place; this is how edited tasks are written back after a round trip
+// through an external editor.
+func (c *Client) Import(ctx context.Context, data []byte) error {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return fmt.Errorf("data must not be empty")
+	}
+
+	cmd := exec.CommandContext(ctx, c.binary, "rc.confirmation=off", "import", "-")
+	cmd.Env = c.buildEnv()
+	cmd.Stdin = bytes.NewReader(data)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		stderrMsg := strings.TrimSpace(stderr.String())
+		if stderrMsg != "" {
+			return fmt.Errorf("task import failed (%w): %s", err, stderrMsg)
+		}
+		return fmt.Errorf("task import failed: %w", err)
+	}
+
+	return nil
 }

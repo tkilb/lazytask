@@ -94,6 +94,33 @@ func TestEdit_TempFileRemovedAfterward(t *testing.T) {
 	}
 }
 
+func TestPrepare_ReturnsRunnableCmdAndReadableSession(t *testing.T) {
+	fake := writeFakeEditor(t, `echo "edited" >> "$1"
+`)
+
+	cmd, session, err := Prepare("original\n", WithEditor(fake))
+	require.NoError(t, err)
+	defer session.Close()
+
+	require.NoError(t, cmd.Run())
+
+	got, err := session.Read()
+	require.NoError(t, err)
+	assert.Equal(t, "original\nedited\n", got)
+}
+
+func TestSession_CloseRemovesTempFile(t *testing.T) {
+	_, session, err := Prepare("content\n")
+	require.NoError(t, err)
+
+	require.NoError(t, session.Close())
+	_, err = session.Read()
+	assert.Error(t, err)
+
+	// Closing an already-removed file must not error.
+	assert.NoError(t, session.Close())
+}
+
 func TestResolveEditor_PrefersWithEditorOption(t *testing.T) {
 	cmd, err := resolveEditor(config{editor: "myeditor --flag", env: []string{"EDITOR=other"}})
 	require.NoError(t, err)
