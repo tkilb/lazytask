@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/tkilb/lazytask/internal/editbuffer"
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
@@ -161,30 +162,28 @@ func deleteTask(deleter TaskDeleter, id string) tea.Cmd {
 	}
 }
 
-// editTask opens task in the user's $EDITOR (as JSON, similar in spirit to
-// `task <id> edit`), then re-imports the edited fields via importer once
-// the editor exits. It suspends the Bubble Tea program for the duration of
-// the editor invocation via tea.ExecProcess.
+// editTask opens task in the user's $EDITOR as a structured plain-text
+// buffer (see internal/editbuffer), similar in spirit to `task <id> edit`,
+// then re-imports the edited fields via importer once the editor exits. It
+// suspends the Bubble Tea program for the duration of the editor
+// invocation via tea.ExecProcess.
 func editTask(importer TaskImporter, task taskwarrior.Task) tea.Cmd {
-	content, err := json.MarshalIndent(task, "", "  ")
+	cmd, session, err := editor.Prepare(editbuffer.Serialize(task))
 	if err != nil {
 		return func() tea.Msg { return taskEditErrMsg{err: err} }
 	}
 
-	cmd, session, err := editor.Prepare(string(content))
-	if err != nil {
-		return func() tea.Msg { return taskEditErrMsg{err: err} }
-	}
-
-	return tea.ExecProcess(cmd, editTaskCallback(importer, session))
+	return tea.ExecProcess(cmd, editTaskCallback(importer, session, task))
 }
 
 // editTaskCallback builds the tea.ExecCallback run once the editor process
-// launched by editTask exits: it reads back session's temp file, parses it
-// as a Task, and re-imports it via importer. Split out from editTask so it
-// can be unit-tested without going through tea.ExecProcess/a real editor
-// process.
-func editTaskCallback(importer TaskImporter, session *editor.Session) func(error) tea.Msg {
+// launched by editTask exits: it reads back session's temp file, parses
+// its editable fields, applies them onto original (preserving read-only
+// fields such as UUID untouched, regardless of what the user may have
+// typed in that section of the buffer), and re-imports the result via
+// importer. Split out from editTask so it can be unit-tested without going
+// through tea.ExecProcess/a real editor process.
+func editTaskCallback(importer TaskImporter, session *editor.Session, original taskwarrior.Task) func(error) tea.Msg {
 	return func(err error) tea.Msg {
 		defer session.Close()
 		if err != nil {
@@ -196,13 +195,14 @@ func editTaskCallback(importer TaskImporter, session *editor.Session) func(error
 			return taskEditErrMsg{err: err}
 		}
 
-		var updated taskwarrior.Task
-		if err := json.Unmarshal([]byte(edited), &updated); err != nil {
+		fields, err := editbuffer.Parse(edited)
+		if err != nil {
 			return taskEditErrMsg{err: fmt.Errorf("parsing edited task: %w", err)}
 		}
-		if strings.TrimSpace(updated.UUID) == "" {
+		if strings.TrimSpace(original.UUID) == "" {
 			return taskEditErrMsg{err: fmt.Errorf("edited task is missing its uuid; not importing")}
 		}
+		updated := editbuffer.Apply(original, fields)
 
 		data, err := json.Marshal(updated)
 		if err != nil {

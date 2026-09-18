@@ -2,19 +2,19 @@
 
 ## Status Overview
 
-| #   | Chunk                            | Status                    | Objective                                                                                                                                                                                                                                                                                                                                                                       |
-| --- | -------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `chore/scaffold`                 | **Committed** (`88c7686`) | Base project scaffolding: go.mod, minimal Bubble Tea model, README, .gitignore.                                                                                                                                                                                                                                                                                                 |
-| 2   | `internal/taskwarrior/client`    | **Committed** (`3015c2b`) | Thin wrapper around `task export` returning parsed `[]Task` (JSON decode only). Unit + integration tests. No UI.                                                                                                                                                                                                                                                                |
-| 3   | `internal/taskwarrior/mutations` | **Committed** (`aa950b5`) | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI.                                                                                                                                                                                                                                                                                     |
-| 4   | `internal/ui/tasklist`           | **Committed**             | Bubble Tea model rendering task list panel (fixture-driven), lazygit-style bordered pane, selection navigation. No live taskwarrior wiring.                                                                                                                                                                                                                                     |
-| 5   | `wire: list panel to real data`  | **Committed** (`fc35204`) | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh.                                                                                                                                                                                                                                                                                                            |
-| 6   | `internal/ui/addform`            | **Committed** (`9c76e74`) | Input panel for new task description, wired to chunk 3 `Add`.                                                                                                                                                                                                                                                                                                                   |
-| 7   | `feature: complete/delete`       | **Committed**             | Keybindings (`d` done, `x` delete + confirm) wired to chunk 3.                                                                                                                                                                                                                                                                                                                  |
-| 8   | `internal/editor`                | **Committed** (`5933879`) | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests.                                                                                                                                                                                                                                                                                             |
-| 9   | `feature: edit task`             | **Committed** (`a0690ff`) | Wire chunk 8 into task list (`e` key), re-import edited fields.                                                                                                                                                                                                                                                                                                                 |
-| 10  | `feature: markdown edit buffer`  | Planned                   | Replace chunk 9's JSON edit buffer with a structured key/value plain-text buffer (editable fields + `---` divider + read-only reference fields) for the `$EDITOR` flow.                                                                                                                                                                                                       |
-| 11  | `polish: status bar & help`      | Planned                   | Lazygit-style bottom bar showing active keybindings for current panel.                                                                                                                                                                                                                                                                                                          |
+| #   | Chunk                            | Status                    | Objective                                                                                                                                                               |
+| --- | -------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `chore/scaffold`                 | **Committed** (`88c7686`) | Base project scaffolding: go.mod, minimal Bubble Tea model, README, .gitignore.                                                                                         |
+| 2   | `internal/taskwarrior/client`    | **Committed** (`3015c2b`) | Thin wrapper around `task export` returning parsed `[]Task` (JSON decode only). Unit + integration tests. No UI.                                                        |
+| 3   | `internal/taskwarrior/mutations` | **Committed** (`aa950b5`) | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI.                                                                             |
+| 4   | `internal/ui/tasklist`           | **Committed**             | Bubble Tea model rendering task list panel (fixture-driven), lazygit-style bordered pane, selection navigation. No live taskwarrior wiring.                             |
+| 5   | `wire: list panel to real data`  | **Committed** (`fc35204`) | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh.                                                                                                    |
+| 6   | `internal/ui/addform`            | **Committed** (`9c76e74`) | Input panel for new task description, wired to chunk 3 `Add`.                                                                                                           |
+| 7   | `feature: complete/delete`       | **Committed**             | Keybindings (`d` done, `x` delete + confirm) wired to chunk 3.                                                                                                          |
+| 8   | `internal/editor`                | **Committed** (`5933879`) | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests.                                                                                     |
+| 9   | `feature: edit task`             | **Committed** (`a0690ff`) | Wire chunk 8 into task list (`e` key), re-import edited fields.                                                                                                         |
+| 10  | `feature: markdown edit buffer`  | **Committed**             | Replace chunk 9's JSON edit buffer with a structured key/value plain-text buffer (editable fields + `---` divider + read-only reference fields) for the `$EDITOR` flow. |
+| 11  | `polish: status bar & help`      | Planned                   | Lazygit-style bottom bar showing active keybindings for current panel.                                                                                                  |
 
 ---
 
@@ -36,22 +36,16 @@ message/diff in `git log` for full history. Key carried-forward decisions:
   edit buffer and re-imports via `task import`; `tea.WithAltScreen()` is
   required in `tea.NewProgram` so resuming from the external editor doesn't
   leave stacked/duplicated panel artifacts on screen.
+- Chunk 10 replaces the JSON edit buffer with `internal/editbuffer`
+  (`Serialize`/`Parse`/`Apply`): a plain-text key/value format with editable
+  fields (`Description`, `Project`, `Priority`, `Due`, `Tags`) above a `---`
+  divider and read-only reference fields below it. `editTaskCallback` now
+  takes the original `Task` as a closure argument and always reconstructs
+  read-only fields (UUID, ID, Status, Entry, Modified, End, Urgency) from it
+  rather than the parsed buffer, so edits to the read-only section are
+  structurally impossible to apply, not merely validated away.
 
 ## Up Next
-
-### Chunk 10: `feature: markdown edit buffer`
-
-- **Objective**: Replace the JSON edit buffer introduced in chunk 9 with a
-  structured, human-friendly plain-text buffer for the `$EDITOR` edit flow
-  (see requirements.md §7, chunk 10 for the full field layout).
-- **Format**: key/value lines (`Field: value`), `Description` may span
-  multiple lines. Editable fields (`Description`, `Project`, `Priority`,
-  `Due`, `Tags`) appear first, followed by a `---` divider, followed by
-  read-only reference fields (`ID`, `UUID`, `Status`, `Entry`, `Modified`,
-  `End`, `Urgency`) shown for context but never re-imported.
-- **Needs**: parser + serializer with unit tests (round-trip, embedded
-  newlines, missing/blank fields, malformed input), swap-in for the
-  existing JSON marshal/unmarshal calls added in chunk 9.
 
 ### Chunk 11: `polish: status bar & help`
 

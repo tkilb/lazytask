@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tkilb/lazytask/internal/editbuffer"
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
@@ -478,12 +479,15 @@ func TestModelUpdate_TaskEditErrMsgSetsErr(t *testing.T) {
 }
 
 func TestEditTaskCallback_ImportsEditedTask(t *testing.T) {
-	_, session, err := editor.Prepare(`{"uuid":"abc-123","description":"Buy milk and eggs","status":"pending"}`)
+	original := taskwarrior.Task{UUID: "abc-123", Description: "Buy milk", Status: "pending"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(taskwarrior.Task{
+		UUID: "abc-123", Description: "Buy milk and eggs", Status: "pending",
+	}))
 	require.NoError(t, err)
 	defer session.Close()
 
 	importer := &stubImporter{}
-	msg := editTaskCallback(importer, session)(nil)
+	msg := editTaskCallback(importer, session, original)(nil)
 
 	_, ok := msg.(taskEditedMsg)
 	assert.True(t, ok)
@@ -496,12 +500,13 @@ func TestEditTaskCallback_ImportsEditedTask(t *testing.T) {
 }
 
 func TestEditTaskCallback_EditorErrorSkipsImport(t *testing.T) {
-	_, session, err := editor.Prepare(`{"uuid":"abc-123"}`)
+	original := taskwarrior.Task{UUID: "abc-123"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(original))
 	require.NoError(t, err)
 	defer session.Close()
 
 	importer := &stubImporter{}
-	msg := editTaskCallback(importer, session)(errors.New("boom"))
+	msg := editTaskCallback(importer, session, original)(errors.New("boom"))
 
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
@@ -510,12 +515,13 @@ func TestEditTaskCallback_EditorErrorSkipsImport(t *testing.T) {
 }
 
 func TestEditTaskCallback_MissingUUIDSkipsImport(t *testing.T) {
-	_, session, err := editor.Prepare(`{"description":"no uuid here"}`)
+	original := taskwarrior.Task{Description: "no uuid here"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(original))
 	require.NoError(t, err)
 	defer session.Close()
 
 	importer := &stubImporter{}
-	msg := editTaskCallback(importer, session)(nil)
+	msg := editTaskCallback(importer, session, original)(nil)
 
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
@@ -523,13 +529,29 @@ func TestEditTaskCallback_MissingUUIDSkipsImport(t *testing.T) {
 	assert.Empty(t, importer.calls)
 }
 
+func TestEditTaskCallback_MalformedBufferSkipsImport(t *testing.T) {
+	original := taskwarrior.Task{UUID: "abc-123", Description: "Buy milk"}
+	_, session, err := editor.Prepare("Project: no description field at all\n---\n")
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session, original)(nil)
+
+	errMsg, ok := msg.(taskEditErrMsg)
+	require.True(t, ok)
+	assert.Contains(t, errMsg.err.Error(), "Description")
+	assert.Empty(t, importer.calls)
+}
+
 func TestEditTaskCallback_ImportErrSetsErrMsg(t *testing.T) {
-	_, session, err := editor.Prepare(`{"uuid":"abc-123"}`)
+	original := taskwarrior.Task{UUID: "abc-123"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(original))
 	require.NoError(t, err)
 	defer session.Close()
 
 	importer := &stubImporter{err: errors.New("import failed")}
-	msg := editTaskCallback(importer, session)(nil)
+	msg := editTaskCallback(importer, session, original)(nil)
 
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
