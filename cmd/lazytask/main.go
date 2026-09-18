@@ -27,6 +27,20 @@ type TaskAdder interface {
 	Add(ctx context.Context, description string, extraArgs ...string) (int, error)
 }
 
+// TaskDoner is the subset of the taskwarrior client needed to mark a task
+// done, so it can be stubbed out in tests without shelling out to the real
+// `task` binary.
+type TaskDoner interface {
+	Done(ctx context.Context, id string) error
+}
+
+// TaskDeleter is the subset of the taskwarrior client needed to delete a
+// task, so it can be stubbed out in tests without shelling out to the real
+// `task` binary.
+type TaskDeleter interface {
+	Delete(ctx context.Context, id string) error
+}
+
 // tasksLoadedMsg carries the result of a successful task fetch.
 type tasksLoadedMsg struct {
 	tasks []taskwarrior.Task
@@ -45,12 +59,31 @@ type taskAddErrMsg struct {
 	err error
 }
 
+// taskDoneMsg carries the result of a successful Done call.
+type taskDoneMsg struct{}
+
+// taskDoneErrMsg carries the error from a failed Done call.
+type taskDoneErrMsg struct {
+	err error
+}
+
+// taskDeletedMsg carries the result of a successful Delete call.
+type taskDeletedMsg struct{}
+
+// taskDeleteErrMsg carries the error from a failed Delete call.
+type taskDeleteErrMsg struct {
+	err error
+}
+
 type model struct {
 	reader   TaskReader
 	adder    TaskAdder
+	doner    TaskDoner
+	deleter  TaskDeleter
 	list     tasklist.Model
 	add      addform.Model
 	adding   bool
+	deleting bool
 	err      error
 	quitting bool
 }
@@ -58,10 +91,12 @@ type model struct {
 func initialModel() model {
 	client := taskwarrior.NewClient()
 	return model{
-		reader: client,
-		adder:  client,
-		list:   tasklist.New(nil),
-		add:    addform.New(),
+		reader:  client,
+		adder:   client,
+		doner:   client,
+		deleter: client,
+		list:    tasklist.New(nil),
+		add:     addform.New(),
 	}
 }
 
@@ -86,6 +121,26 @@ func addTask(adder TaskAdder, description string) tea.Cmd {
 	}
 }
 
+// doneTask returns a tea.Cmd that marks the given task id as done via doner.
+func doneTask(doner TaskDoner, id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := doner.Done(context.Background(), id); err != nil {
+			return taskDoneErrMsg{err: err}
+		}
+		return taskDoneMsg{}
+	}
+}
+
+// deleteTask returns a tea.Cmd that deletes the given task id via deleter.
+func deleteTask(deleter TaskDeleter, id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := deleter.Delete(context.Background(), id); err != nil {
+			return taskDeleteErrMsg{err: err}
+		}
+		return taskDeletedMsg{}
+	}
+}
+
 func (m model) Init() tea.Cmd {
 	return fetchTasks(m.reader)
 }
@@ -93,6 +148,9 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.adding {
 		return m.updateAdding(msg)
+	}
+	if m.deleting {
+		return m.updateDeleting(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -108,6 +166,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			m.add = m.add.Focus()
 			return m, m.add.Init()
+		case "d":
+			m.err = nil
+			if task, ok := m.list.Selected(); ok {
+				return m, doneTask(m.doner, taskID(task))
+			}
+			return m, nil
+		case "x":
+			if _, ok := m.list.Selected(); ok {
+				m.err = nil
+				m.deleting = true
+			}
+			return m, nil
 		}
 	case tasksLoadedMsg:
 		m.err = nil
@@ -123,11 +193,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskAddErrMsg:
 		m.err = msg.err
 		return m, nil
+	case taskDoneMsg:
+		m.err = nil
+		return m, fetchTasks(m.reader)
+	case taskDoneErrMsg:
+		m.err = msg.err
+		return m, nil
+	case taskDeletedMsg:
+		m.err = nil
+		return m, fetchTasks(m.reader)
+	case taskDeleteErrMsg:
+		m.err = msg.err
+		return m, nil
 	}
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+// taskID returns the identifier used to address t in taskwarrior mutation
+// commands, preferring the stable UUID over the pending numeric ID (which
+// can be renumbered by taskwarrior after other tasks complete/are deleted).
+func taskID(t taskwarrior.Task) string {
+	if t.UUID != "" {
+		return t.UUID
+	}
+	return fmt.Sprintf("%d", t.ID)
+}
+
+// updateDeleting handles messages while a delete confirmation is pending.
+func (m model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y":
+			m.deleting = false
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			return m, deleteTask(m.deleter, taskID(task))
+		case "n", "esc":
+			m.deleting = false
+			return m, nil
+		}
+	}
+	return m, nil
 }
 
 // updateAdding handles messages while the add-task input panel is focused.
@@ -167,10 +279,16 @@ func (m model) View() string {
 	}
 
 	view := m.list.View()
+	if m.deleting {
+		if task, ok := m.list.Selected(); ok {
+			view += fmt.Sprintf("\nDelete task %d %q? (y/n)\n", task.ID, task.Description)
+		}
+		return view
+	}
 	if m.err != nil {
 		view += fmt.Sprintf("\nerror: %v\n", m.err)
 	}
-	view += "\n(a) add  (r) refresh  (q) quit\n"
+	view += "\n(a) add  (d) done  (x) delete  (r) refresh  (q) quit\n"
 	return view
 }
 

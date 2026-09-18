@@ -16,11 +16,6 @@ Go using [Bubble Tea](https://github.com/charmbracelet/bubbletea), with a
 (multiple bordered panes, keyboard-driven navigation, contextual
 action bar/status line).
 
-A prior project, `OsamaMahmood/lazytask` (Rust), covers similar ground.
-Worker agents must **not** browse that repo or the internet to "borrow ideas" —
-this doc already encodes the UI/UX decisions needed. Referencing external
-repos mid-task burns credits and causes scope creep.
-
 ## 2. Tech Stack
 
 - Language: Go 1.22
@@ -157,16 +152,17 @@ manual QA note present) before starting the next.
 
 - Filter/search panel
 - Project & tag side panels (lazygit-style left sidebar)
-- Configurable keymaps via YAML
-- Custom user-defined tasks/actions via YAML
-- Undo stack
-- Taskwarrior sync support
+  - Lets have a discussion on how this should work
 - **Focus newly-added task in list** — after submitting the add-task form
   (chunk 6, `internal/ui/addform`), the list refresh currently leaves
   cursor/selection at whatever `tasklist.Model` defaults to. A follow-up
   chunk should make the list panel select/focus the task that was just
   created once the refreshed data comes back, instead of requiring the
   user to scroll to find it.
+- Configurable keymaps via YAML
+- Custom user-defined tasks/actions via YAML
+- Undo stack
+- Taskwarrior sync support
 
 ## 9. Open Questions / Assumptions Log
 

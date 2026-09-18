@@ -45,6 +45,34 @@ func (s *stubAdder) Add(ctx context.Context, description string, extraArgs ...st
 	return len(s.descriptions), nil
 }
 
+// stubDoner is a test double for TaskDoner, avoiding any real `task`
+// process invocation.
+type stubDoner struct {
+	err  error
+	ids  []string
+	call int
+}
+
+func (s *stubDoner) Done(ctx context.Context, id string) error {
+	s.call++
+	s.ids = append(s.ids, id)
+	return s.err
+}
+
+// stubDeleter is a test double for TaskDeleter, avoiding any real `task`
+// process invocation.
+type stubDeleter struct {
+	err  error
+	ids  []string
+	call int
+}
+
+func (s *stubDeleter) Delete(ctx context.Context, id string) error {
+	s.call++
+	s.ids = append(s.ids, id)
+	return s.err
+}
+
 func TestModelInit_FetchesTasks(t *testing.T) {
 	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
 	m := model{reader: reader, list: tasklist.New(nil)}
@@ -137,7 +165,16 @@ func TestModelView(t *testing.T) {
 
 	t.Run("shows add/refresh/quit hint", func(t *testing.T) {
 		m := model{list: tasklist.New(nil)}
-		assert.Contains(t, m.View(), "(a) add  (r) refresh  (q) quit")
+		assert.Contains(t, m.View(), "(a) add  (d) done  (x) delete  (r) refresh  (q) quit")
+	})
+
+	t.Run("shows delete confirmation prompt", func(t *testing.T) {
+		m := model{
+			list:     tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+			deleting: true,
+		}
+		view := m.View()
+		assert.Contains(t, view, `Delete task 1 "Buy milk"? (y/n)`)
 	})
 
 	t.Run("shows add form when adding", func(t *testing.T) {
@@ -237,6 +274,137 @@ func TestModelUpdate_TaskAddErrMsgSetsErr(t *testing.T) {
 	wantErr := errors.New("add failed")
 
 	newModel, cmd := m.Update(taskAddErrMsg{err: wantErr})
+	m = newModel.(model)
+	assert.Equal(t, wantErr, m.err)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_DKeyMarksSelectedTaskDone(t *testing.T) {
+	doner := &stubDoner{}
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}}
+	m := model{reader: reader, doner: doner, list: tasklist.New(reader.tasks)}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	_, ok := msg.(taskDoneMsg)
+	assert.True(t, ok)
+	assert.Equal(t, []string{"abc-123"}, doner.ids)
+
+	// Regression: a successful done must trigger an automatic refresh.
+	newModel, refreshCmd := m.Update(msg)
+	m = newModel.(model)
+	require.NotNil(t, refreshCmd)
+	refreshMsg := refreshCmd()
+	_, ok = refreshMsg.(tasksLoadedMsg)
+	assert.True(t, ok)
+	assert.Equal(t, 1, reader.calls)
+}
+
+func TestModelUpdate_DKeyNoSelectionNoOp(t *testing.T) {
+	doner := &stubDoner{}
+	m := model{doner: doner, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = newModel.(model)
+	assert.Nil(t, cmd)
+	assert.Zero(t, doner.call)
+}
+
+func TestModelUpdate_TaskDoneErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("done failed")
+
+	newModel, cmd := m.Update(taskDoneErrMsg{err: wantErr})
+	m = newModel.(model)
+	assert.Equal(t, wantErr, m.err)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_XKeyEntersDeletingMode(t *testing.T) {
+	m := model{list: tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}})}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = newModel.(model)
+	assert.True(t, m.deleting)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_XKeyNoSelectionNoOp(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = newModel.(model)
+	assert.False(t, m.deleting)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_DeletingConfirmYDeletes(t *testing.T) {
+	deleter := &stubDeleter{}
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}}
+	m := model{
+		reader:   reader,
+		deleter:  deleter,
+		list:     tasklist.New(reader.tasks),
+		deleting: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = newModel.(model)
+	assert.False(t, m.deleting)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	_, ok := msg.(taskDeletedMsg)
+	assert.True(t, ok)
+	assert.Equal(t, []string{"abc-123"}, deleter.ids)
+
+	// Regression: a successful delete must trigger an automatic refresh.
+	newModel, refreshCmd := m.Update(msg)
+	m = newModel.(model)
+	require.NotNil(t, refreshCmd)
+	refreshMsg := refreshCmd()
+	_, ok = refreshMsg.(tasksLoadedMsg)
+	assert.True(t, ok)
+}
+
+func TestModelUpdate_DeletingConfirmNCancels(t *testing.T) {
+	deleter := &stubDeleter{}
+	m := model{
+		deleter:  deleter,
+		list:     tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+		deleting: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = newModel.(model)
+	assert.False(t, m.deleting)
+	assert.Nil(t, cmd)
+	assert.Zero(t, deleter.call)
+}
+
+func TestModelUpdate_DeletingConfirmEscCancels(t *testing.T) {
+	deleter := &stubDeleter{}
+	m := model{
+		deleter:  deleter,
+		list:     tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+		deleting: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.deleting)
+	assert.Nil(t, cmd)
+	assert.Zero(t, deleter.call)
+}
+
+func TestModelUpdate_TaskDeleteErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("delete failed")
+
+	newModel, cmd := m.Update(taskDeleteErrMsg{err: wantErr})
 	m = newModel.(model)
 	assert.Equal(t, wantErr, m.err)
 	assert.Nil(t, cmd)
