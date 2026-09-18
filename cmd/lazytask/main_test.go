@@ -180,7 +180,10 @@ func TestModelView(t *testing.T) {
 
 	t.Run("shows add/refresh/quit hint", func(t *testing.T) {
 		m := model{list: tasklist.New(nil)}
-		assert.Contains(t, m.View(), "(a) add  (d) done  (x) delete  (e) edit  (r) refresh  (q) quit")
+		view := m.View()
+		for _, want := range []string{"a", "add", "d", "done", "x", "delete", "e", "edit", "r", "refresh", "q", "quit"} {
+			assert.Contains(t, view, want)
+		}
 	})
 
 	t.Run("shows delete confirmation prompt", func(t *testing.T) {
@@ -190,13 +193,18 @@ func TestModelView(t *testing.T) {
 		}
 		view := m.View()
 		assert.Contains(t, view, `Delete task 1 "Buy milk"? (y/n)`)
+		assert.Contains(t, view, "confirm")
+		assert.Contains(t, view, "cancel")
 	})
 
 	t.Run("shows add form when adding", func(t *testing.T) {
 		m := model{list: tasklist.New(nil), add: addform.New(), adding: true}
 		view := m.View()
 		assert.Contains(t, view, "Add Task")
-		assert.Contains(t, view, "(enter) add  (esc) cancel")
+		assert.Contains(t, view, "enter")
+		assert.Contains(t, view, "add")
+		assert.Contains(t, view, "esc")
+		assert.Contains(t, view, "cancel")
 	})
 }
 

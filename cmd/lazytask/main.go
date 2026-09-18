@@ -13,7 +13,33 @@ import (
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
+	"github.com/tkilb/lazytask/internal/ui/statusbar"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
+)
+
+// Keybinding sets shown in the status bar for each panel/mode. Kept in one
+// place so the bar and the actual key handling in Update don't drift apart.
+var (
+	listBindings = []statusbar.Binding{
+		{Key: "↑/k", Label: "up"},
+		{Key: "↓/j", Label: "down"},
+		{Key: "a", Label: "add"},
+		{Key: "d", Label: "done"},
+		{Key: "x", Label: "delete"},
+		{Key: "e", Label: "edit"},
+		{Key: "r", Label: "refresh"},
+		{Key: "q", Label: "quit"},
+	}
+
+	addBindings = []statusbar.Binding{
+		{Key: "enter", Label: "add"},
+		{Key: "esc", Label: "cancel"},
+	}
+
+	deleteBindings = []statusbar.Binding{
+		{Key: "y", Label: "confirm"},
+		{Key: "n/esc", Label: "cancel"},
+	}
 )
 
 // TaskReader is the subset of the taskwarrior client this model depends on,
@@ -360,7 +386,7 @@ func (m model) View() string {
 
 	if m.adding {
 		view := m.add.View()
-		view += "\n(enter) add  (esc) cancel\n"
+		view += "\n" + statusbar.Render(addBindings) + "\n"
 		return view
 	}
 
@@ -369,12 +395,13 @@ func (m model) View() string {
 		if task, ok := m.list.Selected(); ok {
 			view += fmt.Sprintf("\nDelete task %d %q? (y/n)\n", task.ID, task.Description)
 		}
+		view += statusbar.Render(deleteBindings) + "\n"
 		return view
 	}
 	if m.err != nil {
 		view += fmt.Sprintf("\nerror: %v\n", m.err)
 	}
-	view += "\n(a) add  (d) done  (x) delete  (e) edit  (r) refresh  (q) quit\n"
+	view += "\n" + statusbar.Render(listBindings) + "\n"
 	return view
 }
 

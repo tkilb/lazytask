@@ -14,7 +14,7 @@
 | 8   | `internal/editor`                | **Committed** (`5933879`) | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests.                                                                                     |
 | 9   | `feature: edit task`             | **Committed** (`a0690ff`) | Wire chunk 8 into task list (`e` key), re-import edited fields.                                                                                                         |
 | 10  | `feature: markdown edit buffer`  | **Committed**             | Replace chunk 9's JSON edit buffer with a structured key/value plain-text buffer (editable fields + `---` divider + read-only reference fields) for the `$EDITOR` flow. |
-| 11  | `polish: status bar & help`      | Planned                   | Lazygit-style bottom bar showing active keybindings for current panel.                                                                                                  |
+| 11  | `polish: status bar & help`      | **Committed** (`2ba558b`) | Lazygit-style bottom bar showing active keybindings for current panel.                                                                                                  |
 
 ---
 
@@ -45,11 +45,18 @@ message/diff in `git log` for full history. Key carried-forward decisions:
   rather than the parsed buffer, so edits to the read-only section are
   structurally impossible to apply, not merely validated away.
 
+- Chunk 11 adds `internal/ui/statusbar` (`Binding{Key, Label}` + `Render`),
+  a single-line lazygit-style key/label bar (lipgloss colors 62/245,
+  two-space separator). `cmd/lazytask/main.go` defines `listBindings`,
+  `addBindings`, `deleteBindings` as the single source of truth for
+  per-mode hints shown in `View()`; keep these in sync with `Update()`'s
+  keybinding switches when future chunks change keys.
+
 ## Up Next
 
-### Chunk 11: `polish: status bar & help`
-
-- **Objective**: Lazygit-style bottom bar showing active keybindings for the current panel.
+All 11 chunks from requirements.md §7 are complete. Next work would come
+from Section 8 "Future Phases" / the deferred list below — needs fresh
+scoping/sign-off before starting, not to be assumed automatically.
 
 ## Deferred Feature Requests (not scheduled as a chunk yet)
 
