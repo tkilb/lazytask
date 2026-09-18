@@ -1,8 +1,9 @@
 # lazytask — Chunked Delivery Requirements
 
-Status: v1 (MVP) planning doc for a driving agent ("driver") to break into
-small, independently-committable worker tasks, delivered **one chunk at a
-time with a mandatory human checkpoint between chunks.**
+Status: v1 (MVP) is complete. This doc now covers ongoing process (Sections
+1-6) and upcoming work (Section 7) for a driving agent ("driver") that
+breaks work into small, independently-committable worker tasks, delivered
+**one chunk at a time with a mandatory human checkpoint between chunks.**
 
 This is explicitly **not** meant to run unattended. There is no
 "orchestrator" that dispatches chunk after chunk on its own — a human must
@@ -28,22 +29,10 @@ action bar/status line).
 - Testing: standard `testing` package + `stretchr/testify` (assertions only,
   no mocking framework unless a worker task demonstrates a clear need)
 
-## 3. MVP Scope (v1) — build these, in this order
+## 3. MVP (v1) — COMPLETE
 
-1. **List/browse tasks** — main panel showing pending tasks (id, description,
-   project, priority, due date), scrollable/selectable list.
-2. **Add task** — a prompt/input panel to create a new task via `task add`.
-3. **Complete/delete task** — act on the currently selected task
-   (`task <id> done`, `task <id> delete`) with a y/n confirmation for delete.
-4. **Edit task fields** — open the task in the user's `$EDITOR` (fallback:
-   `vi`) as a text buffer (similar to `task <id> edit`), then re-import on
-   save.
-
-Explicitly **out of scope for v1** (do not implement unless requirements are
-updated): filter/search panel, project & tag side panels, configurable
-keymaps, custom YAML-defined tasks, undo, sync. These are documented in
-Section 6 as future phases so agents know not to attempt them early or
-gold-plate v1 code in anticipation of them.
+Work now moves to the **Future Phases** in Section 7. Nothing from Section 7
+may be started without explicit human sign-off, per Section 5.
 
 ## 4. Testing Bar (per chunk)
 
@@ -107,7 +96,7 @@ than a human would spend minutes:
   (`go build ./...` and `go test ./...` must both succeed before the chunk
   is considered done). Never leave the tree in a broken intermediate state.
 - **No speculative work.** Agents must not implement future-phase features
-  (Section 6), refactor unrelated code, add dependencies not listed in
+  (Section 7), refactor unrelated code, add dependencies not listed in
   Section 2, or fetch external repos/docs "for inspiration" mid-task.
 - **Hard stop conditions** — a worker agent must halt and report rather than
   continue if it: needs a new third-party dependency, needs to modify more
@@ -117,83 +106,54 @@ than a human would spend minutes:
   not-yet-built chunk, define the minimal Go interface/struct it needs and
   stub it, rather than blocking — this lets chunks be parallelized safely.
 
-## 7. Suggested Chunk Breakdown (work through these one at a time)
+## 7. Future Phases (post-MVP, not to be started without explicit sign-off)
 
-1. `chore/scaffold` — go.mod, `cmd/lazytask/main.go` entrypoint, empty Bubble
-   Tea `Model`/`Update`/`View`, README stub, `.gitignore`. No taskwarrior
-   calls yet.
-2. `internal/taskwarrior/client` — thin wrapper around `exec.Command("task",
-"export", ...)` returning parsed `[]Task` structs (JSON decode only).
-   Unit + integration tests. No UI.
-3. `internal/taskwarrior/mutations` — `Add`, `Done`, `Delete` wrapper
-   functions over the `task` CLI. Unit + integration tests. No UI.
-4. `internal/ui/tasklist` — Bubble Tea model rendering the task list panel
-   (static data / fixture-driven), lazygit-style bordered pane, up/down
-   selection. No live taskwarrior wiring yet.
-5. `wire: list panel to real data` — connect chunk 2's client to chunk 4's
-   panel on startup; a `r` key refresh.
-6. `internal/ui/addform` — input panel for new task description, wired to
-   chunk 3's `Add`.
-7. `feature: complete/delete` — keybindings (`d` done, `x` delete +
-   confirm) wired to chunk 3.
-8. `internal/editor` — helper to write a task to a temp file, launch
-   `$EDITOR`, and read back changes; unit tests only (editor invocation
-   itself is not integration-testable headlessly).
-9. `feature: edit task` — wire chunk 8 into the task list (`e` key),
-   re-import edited fields via taskwarrior client.
-10. `feature: markdown edit buffer` — replace the JSON edit buffer from
-    chunk 9 with a structured, human-friendly plain-text buffer for the
-    `$EDITOR` edit flow. Buffer layout (key/value lines, `Description`
-    allows embedded newlines):
+Same rules as Section 5 (one chunk at a time, human sign-off between each)
+and Section 6 (bounded diff size, no speculative work) apply to every phase
+and chunk below. Each phase's chunk list is a **starting proposal** — it
+should be re-confirmed with the human before the first chunk of that phase
+begins, since scope/design may shift by the time we get there.
 
-    ```
-    Description: <text, may span multiple lines>
-    Project: <text>
-    Priority: <text>
-    Due: <text>
-    Tags: tag1, tag2
-    ---
-    ID: <int>
-    UUID: <string>
-    Status: <string>
-    Entry: <string>
-    Modified: <string>
-    End: <string>
-    Urgency: <float>
-    ```
+### Phase 2 — Navigation & Discovery
 
-    Everything above the `---` divider is user-editable and re-imported on
-    save (`Description`, `Project`, `Priority`, `Due`, `Tags`). Everything
-    below the divider is read-only reference (system/taskwarrior-managed
-    fields) — parsed for display only, never written back, and any edits a
-    user makes there must be silently ignored on re-import (not treated as
-    an error). Parser/serializer for this format needs unit tests
-    (round-trip, embedded newlines in `Description`, missing/blank
-    optional fields, malformed input).
-11. `polish: status bar & help` — lazygit-style bottom bar showing active
-    keybindings for the current panel.
+- General panel layout - needs discussion with user on UX
+- Popups for warnings and errors - needs discussion with user on UX
+- **Filter/search panel** — needs its own discussion on UX (inline filter
+  bar vs. separate panel, taskwarrior filter-string passthrough vs.
+  simplified query syntax) before chunking.
+- **Project & tag side panels** (lazygit-style left sidebar) — needs a
+  discussion on how this should work (single combined tree vs. two panels,
+  selection-to-filter behavior) before chunking.
+- **Focus newly-added task in list** — after submitting the add-task form,
+  the list refresh currently leaves cursor/selection at whatever
+  `tasklist.Model` defaults to. A follow-up chunk should make the list panel
+  select/focus the task that was just created once the refreshed data comes
+  back (matching `Add`'s returned ID/UUID against the refreshed
+  `[]taskwarrior.Task`), instead of requiring the user to scroll to find it.
+  This is the smallest/most well-specified item in this phase and could be
+  taken as its own standalone chunk ahead of the rest of Phase 2.
 
-Each numbered item above is one chunk. Per Section 5, the driving agent must
-stop and get explicit human sign-off after each one (build+tests pass,
-manual QA note present) before starting the next.
+### Phase 3 — Customization
 
-## 8. Future Phases (post-MVP, not to be started without explicit sign-off)
+- **Configurable keymaps via YAML** — user-overridable key bindings for
+  existing actions (list nav, add/done/delete/edit), loaded via the existing
+  YAML config plumbing. Needs a decision on config file location/precedence
+  before chunking.
+- **Custom user-defined tasks/actions via YAML** — let users define their
+  own quick-actions (e.g. canned `task` command templates) in config. Needs
+  a decision on the templating/placeholder syntax before chunking.
 
-- Filter/search panel
-- Project & tag side panels (lazygit-style left sidebar)
-  - Lets have a discussion on how this should work
-- **Focus newly-added task in list** — after submitting the add-task form
-  (chunk 6, `internal/ui/addform`), the list refresh currently leaves
-  cursor/selection at whatever `tasklist.Model` defaults to. A follow-up
-  chunk should make the list panel select/focus the task that was just
-  created once the refreshed data comes back, instead of requiring the
-  user to scroll to find it.
-- Configurable keymaps via YAML
-- Custom user-defined tasks/actions via YAML
-- Undo stack
-- Taskwarrior sync support
+### Phase 4 — Data Safety & Sync
 
-## 9. Open Questions / Assumptions Log
+- **Undo stack** — reverse the last mutation (add/done/delete/edit). Needs a
+  decision on scope (single-level vs. multi-level undo, in-memory vs.
+  persisted across restarts) before chunking.
+- **Taskwarrior sync support** — wrap `task sync` so multi-machine sync
+  configured outside lazytask can be triggered/monitored from the TUI. Needs
+  a decision on how much sync-config setup (if any) lazytask should own vs.
+  assume is already configured via taskwarrior's own `sync` settings.
+
+## 8. Open Questions / Assumptions Log
 
 - Assuming taskwarrior (`task` binary) is already installed on the target
   dev machine and CI runners used for integration tests; if not,
