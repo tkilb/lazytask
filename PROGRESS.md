@@ -8,8 +8,8 @@
 | 2 | `internal/taskwarrior/client` | **Committed** (`3015c2b`) | Thin wrapper around `task export` returning parsed `[]Task` (JSON decode only). Unit + integration tests. No UI. |
 | 3 | `internal/taskwarrior/mutations` | **Committed** (`aa950b5`) | `Add`, `Done`, `Delete` wrapper functions over `task` CLI. Unit + integration tests. No UI. |
 | 4 | `internal/ui/tasklist` | **In Progress** | Bubble Tea model rendering task list panel (fixture-driven), lazygit-style bordered pane, selection navigation. No live taskwarrior wiring. |
-| 5 | `wire: list panel to real data` | **Committed** | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh. |
-| 6 | `internal/ui/addform` | Planned | Input panel for new task description, wired to chunk 3 `Add`. |
+| 5 | `wire: list panel to real data` | **Committed** (`fc35204`) | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh. |
+| 6 | `internal/ui/addform` | **Committed** (`9c76e74`) | Input panel for new task description, wired to chunk 3 `Add`. |
 | 7 | `feature: complete/delete` | Planned | Keybindings (`d` done, `x` delete + confirm) wired to chunk 3. |
 | 8 | `internal/editor` | Planned | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests. |
 | 9 | `feature: edit task` | Planned | Wire chunk 8 into task list (`e` key), re-import edited fields. |
@@ -105,11 +105,42 @@
   - Add/complete a task in another terminal, press `r` in the app, confirm the list refreshes.
   - If `task` is missing/misconfigured, confirm an `error loading tasks: ...` line appears instead of a crash.
   - Press `q`/`ctrl+c` to quit cleanly.
-- **Status**: Verified working by user; commit pending (user commits per standing instructions).
+- **Status**: Verified working by user and committed (`fc35204`).
+
+### Chunk 6: `internal/ui/addform`
+- **Objective**: Input panel for new task description, wired to chunk 3's `Add`.
+- **Files Created**:
+  - [internal/ui/addform/model.go](file:///home/tylerkilburn/Git/lazytask/internal/ui/addform/model.go): Bubble Tea model wrapping `bubbles/textinput`; bordered "Add Task" panel with no taskwarrior dependency of its own. Exposes `New`, `Focus`, `Blur`, `Focused`, `Value`, `Reset`, `Init`, `Update`, `View`.
+  - [internal/ui/addform/model_test.go](file:///home/tylerkilburn/Git/lazytask/internal/ui/addform/model_test.go): unit tests for construction, focus/blur, reset, typing, window resize, and view rendering.
+- **Files Changed**:
+  - [cmd/lazytask/main.go](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main.go): added `TaskAdder` interface; `adder`/`add`/`adding` fields on `model`; `a` enters add mode, `enter` submits (dispatches `addTask` cmd calling `taskwarrior.Client.Add`), `esc` cancels; `taskAddedMsg`/`taskAddErrMsg` handled at the top-level `Update` (unconditional on `adding`) so the async add result always triggers a `fetchTasks` refresh regardless of mode state at message-arrival time; `View` renders the add panel and its own hint line when active; hint/error text updated (`(a) add  (r) refresh  (q) quit`, `error: %v`).
+  - [cmd/lazytask/main_test.go](file:///home/tylerkilburn/Git/lazytask/cmd/lazytask/main_test.go): added `stubAdder` test double; tests for entering add mode, typing+submit (incl. regression test asserting auto-refresh fires after `taskAddedMsg`), empty-submit no-op, esc-cancel, add-success/add-error handling; updated view-hint/error-text assertions.
+  - [go.mod](file:///home/tylerkilburn/Git/lazytask/go.mod) / [go.sum](file:///home/tylerkilburn/Git/lazytask/go.sum): added `github.com/charmbracelet/bubbles` (allowed per requirements.md §2) and its transitive deps; go directive bumped 1.24.0 → 1.24.2.
+- **Verification**:
+  - `gofmt -l .` clean.
+  - `go build ./...` succeeded.
+  - `go vet ./...` succeeded.
+  - `go test ./...` passed (all packages, including new addform tests).
+- **Manual QA**:
+  - Run `go run ./cmd/lazytask`.
+  - Press `a`, type a description, press `enter` — confirm the new task appears in the list immediately without pressing `r`.
+  - Press `a`, type nothing, press `enter` — confirm no task is added.
+  - Press `a`, type something, press `esc` — confirm the add panel closes and nothing is added.
+- **Notes**: Initial implementation had a bug where the list didn't auto-refresh after add — root cause was `m.adding` being reset to `false` before the async `taskAddedMsg` arrived, causing the message-routing gate to misroute it away from the refresh-triggering handler. Fixed by moving `taskAddedMsg`/`taskAddErrMsg` handling to the top-level `Update`, unconditional on `adding`.
+- **Status**: Verified working by user and committed (`9c76e74`).
 
 ---
 
 ## Up Next
 
-### Chunk 6: `internal/ui/addform`
-- **Objective**: Input panel for new task description, wired to chunk 3's `Add`.
+### Chunk 7: `feature: complete/delete`
+- **Objective**: Keybindings (`d` done, `x` delete + confirm) wired to chunk 3's mutations.
+
+## Deferred Feature Requests (not scheduled as a chunk yet)
+
+- **Focus newly-added task in list**: after add-task submission auto-refreshes
+  the list (chunk 6), select/focus the just-created task instead of leaving
+  the cursor wherever it was. Logged in requirements.md §8. Needs its own
+  chunk (e.g. matching the created task's ID/UUID from `Add`'s return value
+  against the refreshed `[]taskwarrior.Task` and setting the list cursor to
+  it) — not implemented as part of chunk 6.

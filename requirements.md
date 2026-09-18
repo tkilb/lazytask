@@ -161,6 +161,12 @@ manual QA note present) before starting the next.
 - Custom user-defined tasks/actions via YAML
 - Undo stack
 - Taskwarrior sync support
+- **Focus newly-added task in list** — after submitting the add-task form
+  (chunk 6, `internal/ui/addform`), the list refresh currently leaves
+  cursor/selection at whatever `tasklist.Model` defaults to. A follow-up
+  chunk should make the list panel select/focus the task that was just
+  created once the refreshed data comes back, instead of requiring the
+  user to scroll to find it.
 
 ## 9. Open Questions / Assumptions Log
 
