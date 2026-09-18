@@ -11,7 +11,7 @@
 | 5   | `wire: list panel to real data`  | **Committed** (`fc35204`) | Connect chunk 2 client to chunk 4 panel on startup; `r` key refresh.                                                                                                                                                                                                                                                                                                            |
 | 6   | `internal/ui/addform`            | **Committed** (`9c76e74`) | Input panel for new task description, wired to chunk 3 `Add`.                                                                                                                                                                                                                                                                                                                   |
 | 7   | `feature: complete/delete`       | **Committed**             | Keybindings (`d` done, `x` delete + confirm) wired to chunk 3.                                                                                                                                                                                                                                                                                                                  |
-| 8   | `internal/editor`                | Planned                   | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests.                                                                                                                                                                                                                                                                                             |
+| 8   | `internal/editor`                | **Committed** (`5933879`) | Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests.                                                                                                                                                                                                                                                                                            |
 | 9   | `feature: edit task`             | Planned                   | Wire chunk 8 into task list (`e` key), re-import edited fields.                                                                                                                                                                                                                                                                                                                 |
 | 10  | `polish: status bar & help`      | Planned                   | Lazygit-style bottom bar showing active keybindings for current panel.                                                                                                                                                                                                                                                                                                          |
 
@@ -159,9 +159,9 @@
 
 ## Up Next
 
-### Chunk 8: `internal/editor`
+### Chunk 9: `feature: edit task`
 
-- **Objective**: Helper to write task to temp file, launch `$EDITOR`, read back changes; unit tests.
+- **Objective**: Wire chunk 8's `internal/editor` into the task list (`e` key), re-import edited fields via the taskwarrior client.
 
 ## Deferred Feature Requests (not scheduled as a chunk yet)
 
