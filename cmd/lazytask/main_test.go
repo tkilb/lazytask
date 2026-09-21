@@ -206,6 +206,44 @@ func TestModelView(t *testing.T) {
 		assert.Contains(t, view, "esc")
 		assert.Contains(t, view, "cancel")
 	})
+
+	t.Run("status panel shows selected task's id/status/project", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{ID: 3, Status: "pending", Project: "home", Description: "Mow lawn"},
+		})}
+		assert.Contains(t, m.View(), "#3 [pending] P:home T:(none)")
+	})
+
+	t.Run("status panel shows placeholder project when task has none", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{ID: 5, Status: "pending", Description: "Buy milk"},
+		})}
+		assert.Contains(t, m.View(), "#5 [pending] P:(none) T:(none)")
+	})
+
+	t.Run("status panel shows tags when present", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{ID: 7, Status: "pending", Project: "home", Tags: []string{"urgent", "chores"}, Description: "Mow lawn"},
+		})}
+		assert.Contains(t, m.View(), "#7 [pending] P:home T:urgent,chores")
+	})
+
+	t.Run("status panel shows placeholder when no task selected", func(t *testing.T) {
+		m := model{list: tasklist.New(nil)}
+		assert.Contains(t, m.View(), "(no task selected)")
+	})
+}
+
+func TestStatusPanelContent_UpdatesWithSelection(t *testing.T) {
+	m := model{list: tasklist.New([]taskwarrior.Task{
+		{ID: 1, Status: "pending", Project: "work", Description: "A"},
+		{ID: 2, Status: "pending", Project: "home", Description: "B"},
+	})}
+	assert.Equal(t, "#1 [pending] P:work T:(none)", m.statusPanelContent())
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	mm := newModel.(model)
+	assert.Equal(t, "#2 [pending] P:home T:(none)", mm.statusPanelContent())
 }
 
 func TestModelUpdate_AKeyEntersAddingMode(t *testing.T) {

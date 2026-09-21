@@ -164,9 +164,12 @@ begins, since scope/design may shift by the time we get there.
      deferred by the user as a follow-up feature — not yet scoped or
      implemented; Tasks currently overflows unclipped if there are more
      tasks than fit.
-  2. **Status panel (key 1)** — shows the ID, status, and project of
-     whatever task is currently selected in Tasks; updates live as the
-     Tasks cursor moves.
+  2. ~~**Status panel (key 1)**~~ — **DONE.** Shows the ID, status,
+     project, and tags of whatever task is currently selected in Tasks
+     (`#<id> [<status>] P:<project> T:<tags>`, with `(none)` placeholders
+     when a task has no project/tags); updates live as the Tasks cursor
+     moves, since it reads the Tasks list's current selection on every
+     render.
   3. **Tasks panel status tabs (Todo/Done/Deleted)** — extends `tasklist`
      with 3 tabs, cycled via `[`/`]` (not the panel-focus number
      keys/Tab), each re-querying `task export` with the matching

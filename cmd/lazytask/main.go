@@ -588,6 +588,26 @@ func (m model) View() string {
 	return view
 }
 
+// statusPanelContent returns the single content line shown in the Status
+// panel: the id, status, project, and tags of whichever task is currently
+// selected in the Tasks list. It updates live as the Tasks cursor moves,
+// since it always reads the list's current selection.
+func (m model) statusPanelContent() string {
+	task, ok := m.list.Selected()
+	if !ok {
+		return "(no task selected)"
+	}
+	project := task.Project
+	if project == "" {
+		project = "(none)"
+	}
+	tags := "(none)"
+	if len(task.Tags) > 0 {
+		tags = strings.Join(task.Tags, ",")
+	}
+	return fmt.Sprintf("#%d  [%s]  P:%s  T:%s", task.ID, task.Status, project, tags)
+}
+
 // renderGrid lays out the lazygit-style panel grid: a left column of 3
 // stacked rows (Status, Tasks, and a bottom row splitting Projects/Tags
 // into side-by-side subcolumns) and one large panel (Details) filling the
@@ -597,7 +617,7 @@ func (m model) renderGrid() string {
 	leftWidth, rightWidth, statusHeight, _, bottomHeight, fullHeight := m.gridDims()
 	projectsWidth, tagsWidth := subColumnWidths(leftWidth)
 
-	status := panel.Render(panelTitle(focusStatus), "(coming soon)", leftWidth, statusHeight, m.focus == focusStatus)
+	status := panel.Render(panelTitle(focusStatus), m.statusPanelContent(), leftWidth, statusHeight, m.focus == focusStatus)
 	tasksPanel := m.list.View()
 	projects := panel.Render(panelTitle(focusProjects), "(coming soon)", projectsWidth, bottomHeight, m.focus == focusProjects)
 	tags := panel.Render(panelTitle(focusTags), "(coming soon)", tagsWidth, bottomHeight, m.focus == focusTags)

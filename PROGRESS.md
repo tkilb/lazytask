@@ -34,17 +34,23 @@
       previously left a gap at the bottom of the left column). Tasks
       panel scrolling was explicitly deferred by the user as a follow-up
       feature (see "Up Next" below) — not implemented yet.
-  - 🔜 Chunk 2 (Status panel, key 1) is next, pending sign-off.
+  - ✅ **Chunk 2 (Status panel, key 1) — DONE.** Status panel shows
+    `#<id> [<status>] P:<project> T:<tags>` for whatever task is currently
+    selected in Tasks (with `(none)` placeholders for empty project/tags),
+    read live off the Tasks list's current selection on every render — no
+    extra state to keep in sync.
+  - 🔜 Chunk 3 (Tasks panel status tabs, Todo/Done/Deleted) is next,
+    pending sign-off.
 
 ## Up Next
 
 Next work comes from requirements.md §7 "Future Phases":
 
-- **Phase 2 — Navigation & Discovery**: Chunk 1 of general panel layout is
-  done (see above); Chunk 2 (Status panel, key 1) needs sign-off to start;
-  popups for warnings/errors still needs a UX discussion before it can be
-  chunked; Tasks panel scrolling (deferred during the Chunk 1 layout
-  refinement) still needs to be scoped/chunked.
+- **Phase 2 — Navigation & Discovery**: Chunks 1-2 of general panel layout
+  are done (see above); Chunk 3 (Tasks panel status tabs) needs sign-off
+  to start; popups for warnings/errors still needs a UX discussion before
+  it can be chunked; Tasks panel scrolling (deferred during the Chunk 1
+  layout refinement) still needs to be scoped/chunked.
 - **Phase 3 — Customization**: configurable keymaps via YAML, custom
   user-defined tasks/actions via YAML.
 - **Phase 4 — Data Safety & Sync**: undo stack, taskwarrior sync support.
