@@ -237,8 +237,9 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 	require.NotNil(t, cmd)
 
 	msg := cmd()
-	_, ok := msg.(taskAddedMsg)
+	addedMsg, ok := msg.(taskAddedMsg)
 	assert.True(t, ok)
+	assert.Equal(t, 1, addedMsg.id)
 	assert.Equal(t, []string{"Buy milk"}, adder.descriptions)
 
 	// Regression: the resulting taskAddedMsg must trigger an automatic
@@ -290,6 +291,33 @@ func TestModelUpdate_TaskAddedMsgTriggersRefresh(t *testing.T) {
 	loaded, ok := msg.(tasksLoadedMsg)
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
+}
+
+func TestModelUpdate_TaskAddedMsg_FocusesNewlyCreatedTask(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{
+		{ID: 1, Description: "Buy milk"},
+		{ID: 2, Description: "Water plants"},
+		{ID: 3, Description: "Newly added task"},
+	}}
+	m := model{reader: reader, list: tasklist.New(nil), add: addform.New()}
+
+	// Simulate Add() reporting the new task's numeric ID.
+	newModel, cmd := m.Update(taskAddedMsg{id: 3})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, 3, m.pendingFocusID)
+
+	// The subsequent refresh should select task 3 and clear the pending
+	// focus so later refreshes (from unrelated actions) don't re-apply it.
+	msg := cmd()
+	loaded := msg.(tasksLoadedMsg)
+	newModel, _ = m.Update(loaded)
+	m = newModel.(model)
+
+	selected, ok := m.list.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 3, selected.ID)
+	assert.Zero(t, m.pendingFocusID)
 }
 
 func TestModelUpdate_TaskAddErrMsgSetsErr(t *testing.T) {

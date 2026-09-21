@@ -74,6 +74,19 @@ func (m Model) Selected() (taskwarrior.Task, bool) {
 	return m.tasks[m.cursor], true
 }
 
+// SelectID moves the cursor to the task whose ID matches id, leaving the
+// cursor unchanged if no task matches (e.g. it was already deleted/renumbered
+// by the time the caller's refresh completed).
+func (m Model) SelectID(id int) Model {
+	for i, t := range m.tasks {
+		if t.ID == id {
+			m.cursor = i
+			break
+		}
+	}
+	return m
+}
+
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	return nil

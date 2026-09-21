@@ -132,6 +132,27 @@ func TestModel_SetTasks_EmptyClampsToZero(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestModel_SelectID_MovesCursorToMatchingTask(t *testing.T) {
+	m := New(sampleTasks())
+
+	m = m.SelectID(3)
+
+	assert.Equal(t, 2, m.cursor)
+	selected, ok := m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 3, selected.ID)
+}
+
+func TestModel_SelectID_NoMatchLeavesCursorUnchanged(t *testing.T) {
+	m := New(sampleTasks())
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, 1, m.cursor)
+
+	m = m.SelectID(999)
+
+	assert.Equal(t, 1, m.cursor)
+}
+
 func TestModel_View_ContainsTaskData(t *testing.T) {
 	m := New(sampleTasks())
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})

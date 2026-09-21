@@ -4,12 +4,17 @@
 
 **v1 (MVP) — COMPLETE.** See `git log` for the full per-chunk history.
 
+**Phase 2 progress:**
+- ✅ Focus newly-added task in list — after add-task submit, the list now
+  selects the newly created task once the refresh completes.
+
 ## Up Next
 
 Next work comes from requirements.md §7 "Future Phases", now broken into:
 
 - **Phase 2 — Navigation & Discovery**: filter/search panel, project & tag
-  side panels (needs design discussion first), focus-newly-added-task fix.
+  side panels (needs design discussion first). Focus-newly-added-task fix
+  is done (see above).
 - **Phase 3 — Customization**: configurable keymaps via YAML, custom
   user-defined tasks/actions via YAML.
 - **Phase 4 — Data Safety & Sync**: undo stack, taskwarrior sync support.

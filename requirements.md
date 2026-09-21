@@ -124,14 +124,11 @@ begins, since scope/design may shift by the time we get there.
 - **Project & tag side panels** (lazygit-style left sidebar) — needs a
   discussion on how this should work (single combined tree vs. two panels,
   selection-to-filter behavior) before chunking.
-- **Focus newly-added task in list** — after submitting the add-task form,
-  the list refresh currently leaves cursor/selection at whatever
-  `tasklist.Model` defaults to. A follow-up chunk should make the list panel
-  select/focus the task that was just created once the refreshed data comes
-  back (matching `Add`'s returned ID/UUID against the refreshed
-  `[]taskwarrior.Task`), instead of requiring the user to scroll to find it.
-  This is the smallest/most well-specified item in this phase and could be
-  taken as its own standalone chunk ahead of the rest of Phase 2.
+- ~~**Focus newly-added task in list**~~ — **DONE.** After submitting the
+  add-task form, the list panel now selects/focuses the task that was just
+  created once the refreshed data comes back, via `tasklist.Model.SelectID`
+  matching `Add`'s returned numeric ID against the refreshed
+  `[]taskwarrior.Task`.
 
 ### Phase 3 — Customization
 

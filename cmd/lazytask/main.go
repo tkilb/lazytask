@@ -87,8 +87,12 @@ type tasksErrMsg struct {
 	err error
 }
 
-// taskAddedMsg carries the result of a successful Add call.
-type taskAddedMsg struct{}
+// taskAddedMsg carries the result of a successful Add call, including the
+// numeric ID Taskwarrior assigned so the list can focus it once the
+// following refresh completes.
+type taskAddedMsg struct {
+	id int
+}
 
 // taskAddErrMsg carries the error from a failed Add call.
 type taskAddErrMsg struct {
@@ -121,17 +125,18 @@ type taskEditErrMsg struct {
 }
 
 type model struct {
-	reader   TaskReader
-	adder    TaskAdder
-	doner    TaskDoner
-	deleter  TaskDeleter
-	importer TaskImporter
-	list     tasklist.Model
-	add      addform.Model
-	adding   bool
-	deleting bool
-	err      error
-	quitting bool
+	reader         TaskReader
+	adder          TaskAdder
+	doner          TaskDoner
+	deleter        TaskDeleter
+	importer       TaskImporter
+	list           tasklist.Model
+	add            addform.Model
+	adding         bool
+	deleting       bool
+	err            error
+	quitting       bool
+	pendingFocusID int
 }
 
 func initialModel() model {
@@ -161,10 +166,11 @@ func fetchTasks(reader TaskReader) tea.Cmd {
 // addTask returns a tea.Cmd that creates a new task via adder.
 func addTask(adder TaskAdder, description string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := adder.Add(context.Background(), description); err != nil {
+		id, err := adder.Add(context.Background(), description)
+		if err != nil {
 			return taskAddErrMsg{err: err}
 		}
-		return taskAddedMsg{}
+		return taskAddedMsg{id: id}
 	}
 }
 
@@ -288,6 +294,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tasksLoadedMsg:
 		m.err = nil
 		m.list = m.list.SetTasks(msg.tasks)
+		if m.pendingFocusID != 0 {
+			m.list = m.list.SelectID(m.pendingFocusID)
+			m.pendingFocusID = 0
+		}
 		return m, nil
 	case tasksErrMsg:
 		m.err = msg.err
@@ -295,6 +305,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskAddedMsg:
 		m.err = nil
 		m.add = m.add.Reset()
+		m.pendingFocusID = msg.id
 		return m, fetchTasks(m.reader)
 	case taskAddErrMsg:
 		m.err = msg.err
