@@ -7,6 +7,20 @@
 **Phase 2 progress:**
 - ✅ Focus newly-added task in list — after add-task submit, the list now
   selects the newly created task once the refresh completes.
+- ✅ Popups for warnings and errors — new `internal/ui/popup` package
+  renders bordered, colored overlay boxes on top of the preserved
+  background (via `popup.Overlay`): `Box` for Info/Warning/Error severities
+  (dismiss on any key), and `ConfirmBox` for yes/no confirmations, sharing a
+  `renderBox` layout helper. Follow-up ad-hoc UI passes (direct
+  instruction) applied the same popup styling elsewhere for consistency:
+  - The add-task form is now a centered popup overlay instead of a
+    full-screen panel — the grid stays visible behind it, matching the
+    look/feel of the other popups.
+  - The delete-confirmation prompt (previously inline status-bar text,
+    `Delete task N "desc"? (y/n)`) is now an orange `ConfirmBox` overlay
+    with a "Confirm" title and `(y) confirm  (n/esc) cancel` hint; the
+    old `deleteBindings` status-bar entry was removed since it's no
+    longer needed.
 - 🔜 General panel layout (grid + focus nav, status/tasks-tabs/projects/tags
   panels, details panel) — UX discussed and scoped into 6 chunks in
   requirements.md §7. This also covers what was previously listed as the
@@ -48,9 +62,9 @@ Next work comes from requirements.md §7 "Future Phases":
 
 - **Phase 2 — Navigation & Discovery**: Chunks 1-2 of general panel layout
   are done (see above); Chunk 3 (Tasks panel status tabs) needs sign-off
-  to start; popups for warnings/errors still needs a UX discussion before
-  it can be chunked; Tasks panel scrolling (deferred during the Chunk 1
-  layout refinement) still needs to be scoped/chunked.
+  to start; popups for warnings/errors are done (see above); Tasks panel
+  scrolling (deferred during the Chunk 1 layout refinement) still needs to
+  be scoped/chunked.
 - **Phase 3 — Customization**: configurable keymaps via YAML, custom
   user-defined tasks/actions via YAML.
 - **Phase 4 — Data Safety & Sync**: undo stack, taskwarrior sync support.

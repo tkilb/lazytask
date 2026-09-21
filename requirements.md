@@ -121,8 +121,18 @@ begins, since scope/design may shift by the time we get there.
   created once the refreshed data comes back, via `tasklist.Model.SelectID`
   matching `Add`'s returned numeric ID against the refreshed
   `[]taskwarrior.Task`.
-- **Popups for warnings and errors** — still needs discussion with user on
-  UX; not yet scoped/chunked.
+- ~~**Popups for warnings and errors**~~ — **DONE.** Added
+  `internal/ui/popup` (bordered, colored overlay boxes rendered on top of
+  the preserved background via `popup.Overlay`): `Box` for
+  Info/Warning/Error severities (dismiss-any-key), and `ConfirmBox` for
+  yes/no confirmations, both sharing a `renderBox` layout helper. Follow-up
+  ad-hoc work (direct instruction, not a separate sign-off) converted two
+  other UI surfaces to the same popup styling for consistency: the add-task
+  form (previously a full-screen panel replacing the background; now a
+  centered overlay box with the grid still visible behind it) and the
+  delete-confirmation prompt (previously plain status-bar text; now an
+  orange `ConfirmBox` overlay, same visual language as the severity
+  popups).
 - **Tasks panel scrolling** — deferred follow-up from the Chunk 1 layout
   refinement above: when the task list is taller than the panel's assigned
   height, it should scroll instead of overflowing unclipped (current

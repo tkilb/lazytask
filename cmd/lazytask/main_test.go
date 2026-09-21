@@ -14,6 +14,7 @@ import (
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
+	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 )
 
@@ -109,7 +110,7 @@ func TestModelUpdate_TasksLoadedMsg(t *testing.T) {
 	mm, ok := newModel.(model)
 	assert.True(t, ok)
 	assert.Nil(t, cmd)
-	assert.Nil(t, mm.err)
+	assert.False(t, mm.popups.Active())
 
 	selected, ok := mm.list.Selected()
 	assert.True(t, ok)
@@ -124,7 +125,10 @@ func TestModelUpdate_TasksErrMsg(t *testing.T) {
 	mm, ok := newModel.(model)
 	assert.True(t, ok)
 	assert.Nil(t, cmd)
-	assert.Equal(t, wantErr, mm.err)
+	popupMsg, popupOk := mm.popups.Current()
+	require.True(t, popupOk)
+	assert.Equal(t, popup.Error, popupMsg.Severity)
+	assert.Equal(t, wantErr.Error(), popupMsg.Text)
 }
 
 func TestModelUpdate_RefreshKeyTriggersFetch(t *testing.T) {
@@ -173,9 +177,10 @@ func TestModelView(t *testing.T) {
 		assert.Equal(t, "Exiting lazytask...\n", m.View())
 	})
 
-	t.Run("shows error when present", func(t *testing.T) {
-		m := model{list: tasklist.New(nil), err: errors.New("task binary not found")}
-		assert.Contains(t, m.View(), "error: task binary not found")
+	t.Run("shows error popup when present", func(t *testing.T) {
+		m := model{list: tasklist.New(nil), popups: popup.Model{}.Push(popup.Message{Severity: popup.Error, Text: "task binary not found"})}
+		assert.Contains(t, m.View(), "task binary not found")
+		assert.Contains(t, m.View(), "Error")
 	})
 
 	t.Run("shows add/refresh/quit hint", func(t *testing.T) {
@@ -192,7 +197,8 @@ func TestModelView(t *testing.T) {
 			deleting: true,
 		}
 		view := m.View()
-		assert.Contains(t, view, `Delete task 1 "Buy milk"? (y/n)`)
+		assert.Contains(t, view, `Delete task 1 "Buy milk"?`)
+		assert.Contains(t, view, "Confirm")
 		assert.Contains(t, view, "confirm")
 		assert.Contains(t, view, "cancel")
 	})
@@ -211,21 +217,21 @@ func TestModelView(t *testing.T) {
 		m := model{list: tasklist.New([]taskwarrior.Task{
 			{ID: 3, Status: "pending", Project: "home", Description: "Mow lawn"},
 		})}
-		assert.Contains(t, m.View(), "#3 [pending] P:home T:(none)")
+		assert.Contains(t, m.View(), "#3  [pending]  P:home  T:(none)")
 	})
 
 	t.Run("status panel shows placeholder project when task has none", func(t *testing.T) {
 		m := model{list: tasklist.New([]taskwarrior.Task{
 			{ID: 5, Status: "pending", Description: "Buy milk"},
 		})}
-		assert.Contains(t, m.View(), "#5 [pending] P:(none) T:(none)")
+		assert.Contains(t, m.View(), "#5  [pending]  P:(none)  T:(none)")
 	})
 
 	t.Run("status panel shows tags when present", func(t *testing.T) {
 		m := model{list: tasklist.New([]taskwarrior.Task{
 			{ID: 7, Status: "pending", Project: "home", Tags: []string{"urgent", "chores"}, Description: "Mow lawn"},
 		})}
-		assert.Contains(t, m.View(), "#7 [pending] P:home T:urgent,chores")
+		assert.Contains(t, m.View(), "#7  [pending]  P:home  T:urgent,chores")
 	})
 
 	t.Run("status panel shows placeholder when no task selected", func(t *testing.T) {
@@ -239,11 +245,11 @@ func TestStatusPanelContent_UpdatesWithSelection(t *testing.T) {
 		{ID: 1, Status: "pending", Project: "work", Description: "A"},
 		{ID: 2, Status: "pending", Project: "home", Description: "B"},
 	})}
-	assert.Equal(t, "#1 [pending] P:work T:(none)", m.statusPanelContent())
+	assert.Equal(t, "#1  [pending]  P:work  T:(none)", m.statusPanelContent())
 
 	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	mm := newModel.(model)
-	assert.Equal(t, "#2 [pending] P:home T:(none)", mm.statusPanelContent())
+	assert.Equal(t, "#2  [pending]  P:home  T:(none)", mm.statusPanelContent())
 }
 
 func TestModelUpdate_AKeyEntersAddingMode(t *testing.T) {
@@ -293,7 +299,7 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 	assert.Equal(t, 1, reader.calls)
 }
 
-func TestModelUpdate_AddingSubmitEmptyDescriptionNoOp(t *testing.T) {
+func TestModelUpdate_AddingSubmitEmptyDescriptionShowsWarningPopup(t *testing.T) {
 	adder := &stubAdder{}
 	m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true}
 	m.add = m.add.Focus()
@@ -303,6 +309,9 @@ func TestModelUpdate_AddingSubmitEmptyDescriptionNoOp(t *testing.T) {
 	assert.True(t, m.adding)
 	assert.Nil(t, cmd)
 	assert.Empty(t, adder.descriptions)
+	msg, ok := m.popups.Current()
+	require.True(t, ok)
+	assert.Equal(t, popup.Warning, msg.Severity)
 }
 
 func TestModelUpdate_AddingEscCancels(t *testing.T) {
@@ -364,7 +373,7 @@ func TestModelUpdate_TaskAddErrMsgSetsErr(t *testing.T) {
 
 	newModel, cmd := m.Update(taskAddErrMsg{err: wantErr})
 	m = newModel.(model)
-	assert.Equal(t, wantErr, m.err)
+	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)
 }
 
@@ -408,7 +417,7 @@ func TestModelUpdate_TaskDoneErrMsgSetsErr(t *testing.T) {
 
 	newModel, cmd := m.Update(taskDoneErrMsg{err: wantErr})
 	m = newModel.(model)
-	assert.Equal(t, wantErr, m.err)
+	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)
 }
 
@@ -495,7 +504,7 @@ func TestModelUpdate_TaskDeleteErrMsgSetsErr(t *testing.T) {
 
 	newModel, cmd := m.Update(taskDeleteErrMsg{err: wantErr})
 	m = newModel.(model)
-	assert.Equal(t, wantErr, m.err)
+	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)
 }
 
@@ -515,7 +524,7 @@ func TestModelUpdate_EKeyWithSelectionReturnsCmd(t *testing.T) {
 
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
 	m = newModel.(model)
-	assert.Nil(t, m.err)
+	assert.False(t, m.popups.Active())
 	assert.NotNil(t, cmd)
 }
 
@@ -533,7 +542,7 @@ func TestModelUpdate_TaskEditedMsgTriggersRefresh(t *testing.T) {
 
 	newModel, cmd := m.Update(taskEditedMsg{})
 	m = newModel.(model)
-	assert.Nil(t, m.err)
+	assert.False(t, m.popups.Active())
 	require.NotNil(t, cmd)
 
 	msg := cmd()
@@ -548,7 +557,7 @@ func TestModelUpdate_TaskEditErrMsgSetsErr(t *testing.T) {
 
 	newModel, cmd := m.Update(taskEditErrMsg{err: wantErr})
 	m = newModel.(model)
-	assert.Equal(t, wantErr, m.err)
+	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)
 }
 
@@ -716,4 +725,14 @@ func TestEditTaskCallback_ImportErrSetsErrMsg(t *testing.T) {
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
 	assert.Contains(t, errMsg.err.Error(), "import failed")
+}
+
+// assertErrPopup asserts that m has a single queued error-severity popup
+// matching wantErr.
+func assertErrPopup(t *testing.T, m model, wantErr error) {
+	t.Helper()
+	msg, ok := m.popups.Current()
+	require.True(t, ok, "expected a queued popup")
+	assert.Equal(t, popup.Error, msg.Severity)
+	assert.Equal(t, wantErr.Error(), msg.Text)
 }

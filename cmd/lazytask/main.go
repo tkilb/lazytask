@@ -15,6 +15,7 @@ import (
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/panel"
+	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/statusbar"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 )
@@ -119,16 +120,6 @@ var (
 		{Key: "r", Label: "refresh"},
 		{Key: "q", Label: "quit"},
 	}
-
-	addBindings = []statusbar.Binding{
-		{Key: "enter", Label: "add"},
-		{Key: "esc", Label: "cancel"},
-	}
-
-	deleteBindings = []statusbar.Binding{
-		{Key: "y", Label: "confirm"},
-		{Key: "n/esc", Label: "cancel"},
-	}
 )
 
 // TaskReader is the subset of the taskwarrior client this model depends on,
@@ -223,7 +214,7 @@ type model struct {
 	add            addform.Model
 	adding         bool
 	deleting       bool
-	err            error
+	popups         popup.Model
 	quitting       bool
 	pendingFocusID int
 	focus          panelFocus
@@ -403,6 +394,16 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// A pending popup blocks all other input: any keypress dismisses it
+	// rather than reaching the add/delete/panel handling below. Non-key
+	// messages (e.g. window resizes, or async command results that may
+	// themselves enqueue further popups) still flow through normally.
+	if m.popups.Active() {
+		if _, ok := msg.(tea.KeyMsg); ok {
+			m.popups = m.popups.Dismiss()
+			return m, nil
+		}
+	}
 	if m.adding {
 		return m.updateAdding(msg)
 	}
@@ -436,30 +437,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchTasks(m.reader)
 		case "a":
 			m.adding = true
-			m.err = nil
 			m.add = m.add.Focus()
 			return m, m.add.Init()
 		case "d":
-			m.err = nil
 			if task, ok := m.list.Selected(); ok {
 				return m, doneTask(m.doner, taskID(task))
 			}
 			return m, nil
 		case "x":
 			if _, ok := m.list.Selected(); ok {
-				m.err = nil
 				m.deleting = true
 			}
 			return m, nil
 		case "e":
-			m.err = nil
 			if task, ok := m.list.Selected(); ok {
 				return m, editTask(m.importer, task)
 			}
 			return m, nil
 		}
 	case tasksLoadedMsg:
-		m.err = nil
 		m.list = m.list.SetTasks(msg.tasks)
 		if m.pendingFocusID != 0 {
 			m.list = m.list.SelectID(m.pendingFocusID)
@@ -467,33 +463,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tasksErrMsg:
-		m.err = msg.err
+		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskAddedMsg:
-		m.err = nil
 		m.add = m.add.Reset()
 		m.pendingFocusID = msg.id
 		return m, fetchTasks(m.reader)
 	case taskAddErrMsg:
-		m.err = msg.err
+		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
-		m.err = nil
 		return m, fetchTasks(m.reader)
 	case taskDoneErrMsg:
-		m.err = msg.err
+		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
-		m.err = nil
 		return m, fetchTasks(m.reader)
 	case taskDeleteErrMsg:
-		m.err = msg.err
+		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
-		m.err = nil
 		return m, fetchTasks(m.reader)
 	case taskEditErrMsg:
-		m.err = msg.err
+		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	}
 
@@ -515,6 +507,11 @@ func taskID(t taskwarrior.Task) string {
 		return t.UUID
 	}
 	return fmt.Sprintf("%d", t.ID)
+}
+
+// errPopup builds an error-severity popup.Message from err.
+func errPopup(err error) popup.Message {
+	return popup.Message{Severity: popup.Error, Text: err.Error()}
 }
 
 // updateDeleting handles messages while a delete confirmation is pending.
@@ -549,6 +546,7 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			description := strings.TrimSpace(m.add.Value())
 			if description == "" {
+				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Description cannot be empty."})
 				return m, nil
 			}
 			m.adding = false
@@ -562,29 +560,55 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// screenDims returns the model's last known terminal size, falling back to
+// the same defaults gridDims() uses when no tea.WindowSizeMsg has arrived
+// yet (e.g. in tests calling View() directly).
+func (m model) screenDims() (width, height int) {
+	width = m.width
+	if width <= 0 {
+		width = defaultGridWidth
+	}
+	height = m.height
+	if height <= 0 {
+		height = defaultGridHeight
+	}
+	return width, height
+}
+
+// baseView renders the grid plus whatever status line/prompt belongs
+// underneath it, ignoring the adding/popup overlays layered on top by
+// View(). This is the "background" the add-task box and any popup are
+// composited over, so the rest of the UI stays visible behind them instead
+// of being replaced by a blank screen.
+func (m model) baseView() string {
+	view := m.renderGrid()
+	view += "\n" + statusbar.Render(listBindings) + "\n"
+	return view
+}
+
 func (m model) View() string {
 	if m.quitting {
 		return "Exiting lazytask...\n"
 	}
 
+	width, height := m.screenDims()
+	view := m.baseView()
+
 	if m.adding {
-		view := m.add.View()
-		view += "\n" + statusbar.Render(addBindings) + "\n"
-		return view
+		view = popup.Overlay(view, m.add.View(), width, height)
 	}
 
-	view := m.renderGrid()
 	if m.deleting {
 		if task, ok := m.list.Selected(); ok {
-			view += fmt.Sprintf("\nDelete task %d %q? (y/n)\n", task.ID, task.Description)
+			text := fmt.Sprintf("Delete task %d %q?", task.ID, task.Description)
+			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
 		}
-		view += statusbar.Render(deleteBindings) + "\n"
-		return view
 	}
-	if m.err != nil {
-		view += fmt.Sprintf("\nerror: %v\n", m.err)
+
+	if msg, ok := m.popups.Current(); ok {
+		view = popup.Overlay(view, popup.Box(msg, width), width, height)
 	}
-	view += "\n" + statusbar.Render(listBindings) + "\n"
+
 	return view
 }
 

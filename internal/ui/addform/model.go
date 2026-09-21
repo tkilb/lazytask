@@ -12,17 +12,28 @@ import (
 )
 
 var (
-	borderStyle = lipgloss.NewStyle().
+	borderColor = lipgloss.Color("62")
+
+	// bodyStyle draws the left/right/bottom border only; the top border is
+	// built by hand in View() so the title and key hints can be embedded in
+	// it, lazygit-style.
+	bodyStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62"))
+			BorderTop(false).
+			BorderForeground(borderColor)
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("62"))
+			Foreground(borderColor)
+
+	hintStyle = lipgloss.NewStyle().
+			Foreground(borderColor)
 )
 
 // minPanelWidth is used when no tea.WindowSizeMsg has been received yet.
-const minPanelWidth = 40
+const minPanelWidth = 80
+
+const hintText = "Press <enter> to add, <esc> to cancel"
 
 // Model is a Bubble Tea model rendering a single-line bordered text input
 // panel for entering a new task description. This package has no
@@ -37,6 +48,7 @@ type Model struct {
 // New constructs a Model with an empty input.
 func New() Model {
 	ti := textinput.New()
+	ti.Prompt = ""
 	ti.Placeholder = "Task description..."
 	ti.CharLimit = 256
 	return Model{input: ti}
@@ -97,15 +109,37 @@ func (m Model) View() string {
 	if width <= 0 {
 		width = minPanelWidth
 	}
-	innerWidth := width - 4
+	innerWidth := width - 2
 	if innerWidth < 16 {
 		innerWidth = 16
 	}
 
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Add Task"))
-	b.WriteString("\n")
-	b.WriteString(m.input.View())
+	body := bodyStyle.Width(innerWidth).Render(m.input.View())
+	return topBorder(innerWidth) + "\n" + body
+}
 
-	return borderStyle.Width(innerWidth).Render(b.String())
+// topBorder builds the box's top edge with the "Add Task" title embedded on
+// the left and the key-binding hint embedded on the right, lazygit-style,
+// e.g. "╭─ Add Task ─────── Press <enter> to add, <esc> to cancel ─╮".
+func topBorder(innerWidth int) string {
+	border := lipgloss.RoundedBorder()
+
+	title := " " + titleStyle.Render("Add Task") + " "
+	hint := " " + hintStyle.Render(hintText) + " "
+
+	// totalWidth is the full rendered width, including the two corner
+	// runes, matching bodyStyle.Width(innerWidth)'s rendered width.
+	totalWidth := innerWidth + 2
+	fillWidth := totalWidth - 2 - lipgloss.Width(title) - lipgloss.Width(hint)
+	if fillWidth < 1 {
+		fillWidth = 1
+	}
+
+	var b strings.Builder
+	b.WriteString(border.TopLeft)
+	b.WriteString(title)
+	b.WriteString(strings.Repeat(border.Top, fillWidth))
+	b.WriteString(hint)
+	b.WriteString(border.TopRight)
+	return b.String()
 }
