@@ -21,9 +21,12 @@ const (
 	FocusedColor = lipgloss.Color("212")
 
 	// minWidth/minHeight guard against nonsensical (zero or negative)
-	// panel sizes, e.g. before the first tea.WindowSizeMsg arrives.
+	// panel sizes, e.g. before the first tea.WindowSizeMsg arrives. minHeight
+	// is deliberately just 1 content row (rather than enough for a header
+	// plus rows) so panels that intentionally want a single-line body, like
+	// the Status panel's fixed height, aren't forced taller than requested.
 	minWidth  = 10
-	minHeight = 3
+	minHeight = 1
 )
 
 // BorderStyle returns the rounded-border style for a panel, colored

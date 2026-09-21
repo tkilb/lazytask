@@ -154,8 +154,19 @@ func (m Model) View() string {
 	}
 
 	body := b.String()
-	height := strings.Count(body, "\n") + 1
-	return panel.Frame("2 Tasks", body, innerWidth, height, m.focused)
+
+	// Fill out to the panel's assigned height (from the last
+	// tea.WindowSizeMsg) rather than shrinking to just however many lines
+	// the task list happens to need, so the panel doesn't leave a gap below
+	// it in the surrounding grid. If there are more tasks than fit, the
+	// body is left to overflow for now (scrolling is a follow-up feature).
+	_, innerHeight := panel.InnerSize(width, m.height)
+	contentHeight := strings.Count(body, "\n") + 1
+	if innerHeight > contentHeight {
+		contentHeight = innerHeight
+	}
+
+	return panel.Frame("2 Tasks", body, innerWidth, contentHeight, m.focused)
 }
 
 // formatRow lays out the fixed-width columns used by both the header and

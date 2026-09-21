@@ -97,6 +97,12 @@ const (
 	// and Details panels' top borders, both on the grid's first row)
 	// scrolls off-screen.
 	gridBottomOverhead = 2
+
+	// statusPanelHeight is the Status panel's fixed outer height: one
+	// content line (the selected task's id/status/project) plus the two
+	// border rows. Unlike Tasks and the Projects/Tags row, it doesn't grow
+	// with the terminal.
+	statusPanelHeight = 3
 )
 
 // Keybinding sets shown in the status bar for each panel/mode. Kept in one
@@ -247,10 +253,15 @@ func (m model) setFocus(f panelFocus) model {
 }
 
 // gridDims computes the panel grid's column widths and left-column row
-// height from the model's last known terminal size, falling back to sane
+// heights from the model's last known terminal size, falling back to sane
 // defaults if no tea.WindowSizeMsg has been received yet (e.g. in tests
-// that call View directly).
-func (m model) gridDims() (leftWidth, rightWidth, rowHeight, fullHeight int) {
+// that call View directly). The left column's 3 rows use static
+// proportions rather than an even split: Status is a fixed single-line
+// panel, and of the remaining height Tasks gets about two-thirds (half,
+// plus a third of what would otherwise go to the bottom row) since it's
+// the most important panel, with the bottom Projects/Tags row getting the
+// rest.
+func (m model) gridDims() (leftWidth, rightWidth, statusHeight, tasksHeight, bottomHeight, fullHeight int) {
 	width := m.width
 	if width <= 0 {
 		width = defaultGridWidth
@@ -263,9 +274,33 @@ func (m model) gridDims() (leftWidth, rightWidth, rowHeight, fullHeight int) {
 	}
 	leftWidth = width / 2
 	rightWidth = width - leftWidth
-	rowHeight = height / 4
 	fullHeight = height
-	return leftWidth, rightWidth, rowHeight, fullHeight
+
+	statusHeight = statusPanelHeight
+	tasksHeight = height / 2
+	bottomHeight = height - statusHeight - tasksHeight
+	if bottomHeight < 0 {
+		bottomHeight = 0
+	}
+
+	// Shift some of the Projects/Tags row's height over to Tasks, since
+	// Tasks is the more important panel and benefits more from the extra
+	// vertical space, while still leaving Projects/Tags a usable amount.
+	shift := bottomHeight / 3
+	tasksHeight += shift
+	bottomHeight -= shift
+
+	return leftWidth, rightWidth, statusHeight, tasksHeight, bottomHeight, fullHeight
+}
+
+// subColumnWidths splits a row's total width into two side-by-side
+// subcolumns (used for the Projects/Tags row at the bottom of the left
+// column), the second absorbing any remainder so the pair always sums to
+// leftWidth.
+func subColumnWidths(leftWidth int) (firstWidth, secondWidth int) {
+	firstWidth = leftWidth / 2
+	secondWidth = leftWidth - firstWidth
+	return firstWidth, secondWidth
 }
 
 // fetchTasks returns a tea.Cmd that loads pending tasks via reader.
@@ -379,9 +414,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		leftWidth, _, rowHeight, _ := m.gridDims()
+		leftWidth, _, _, tasksHeight, _, _ := m.gridDims()
 		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: rowHeight})
+		m.list, cmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: tasksHeight})
 		return m, cmd
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -553,19 +588,22 @@ func (m model) View() string {
 	return view
 }
 
-// renderGrid lays out the lazygit-style panel grid: a left column of 4
-// stacked panels (Status, Tasks, Projects, Tags) and one large panel
-// (Details) filling the right column. Only the Tasks panel (slot 2) has
-// real content so far; the rest are placeholders until later chunks.
+// renderGrid lays out the lazygit-style panel grid: a left column of 3
+// stacked rows (Status, Tasks, and a bottom row splitting Projects/Tags
+// into side-by-side subcolumns) and one large panel (Details) filling the
+// right column. Only the Tasks panel (slot 2) has real content so far; the
+// rest are placeholders until later chunks.
 func (m model) renderGrid() string {
-	leftWidth, rightWidth, rowHeight, fullHeight := m.gridDims()
+	leftWidth, rightWidth, statusHeight, _, bottomHeight, fullHeight := m.gridDims()
+	projectsWidth, tagsWidth := subColumnWidths(leftWidth)
 
-	status := panel.Render(panelTitle(focusStatus), "(coming soon)", leftWidth, rowHeight, m.focus == focusStatus)
+	status := panel.Render(panelTitle(focusStatus), "(coming soon)", leftWidth, statusHeight, m.focus == focusStatus)
 	tasksPanel := m.list.View()
-	projects := panel.Render(panelTitle(focusProjects), "(coming soon)", leftWidth, rowHeight, m.focus == focusProjects)
-	tags := panel.Render(panelTitle(focusTags), "(coming soon)", leftWidth, rowHeight, m.focus == focusTags)
+	projects := panel.Render(panelTitle(focusProjects), "(coming soon)", projectsWidth, bottomHeight, m.focus == focusProjects)
+	tags := panel.Render(panelTitle(focusTags), "(coming soon)", tagsWidth, bottomHeight, m.focus == focusTags)
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, projects, tags)
 
-	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, projects, tags)
+	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, bottomRow)
 
 	details := panel.Render(panelTitle(focusDetails), "(coming soon)", rightWidth, fullHeight, m.focus == focusDetails)
 

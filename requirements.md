@@ -123,6 +123,10 @@ begins, since scope/design may shift by the time we get there.
   `[]taskwarrior.Task`.
 - **Popups for warnings and errors** — still needs discussion with user on
   UX; not yet scoped/chunked.
+- **Tasks panel scrolling** — deferred follow-up from the Chunk 1 layout
+  refinement above: when the task list is taller than the panel's assigned
+  height, it should scroll instead of overflowing unclipped (current
+  behavior). Not yet scoped/chunked.
 - **General panel layout** — UX discussed and scoped below into 6 chunks,
   based on a since-removed `layout.md` design note. This covers the general
   layout, the filter/search panel, and the project & tag side panels as a
@@ -143,7 +147,23 @@ begins, since scope/design may shift by the time we get there.
      inline in the top border (lazygit-style, e.g. `╭──[1]-Status────╮`)
      instead of a separate content row, reclaiming a row of body height in
      every panel, and the Tasks panel shows its `[2]-Tasks` number-key hint
-     like the other four.
+     like the other four. A second follow-up pass (ad-hoc, direct
+     instruction rather than a new formal chunk) reworked the left column's
+     internal layout: Projects and Tags now sit side-by-side as two
+     half-width panels in a single row at the bottom of the left column
+     (instead of two separate stacked rows), and row heights are static
+     rather than an even split — Status is a fixed single content line,
+     Tasks takes the largest remaining share, and Projects/Tags share the
+     rest, tuned to roughly Tasks 67% / Projects+Tags 33% of the
+     non-Status height. This required lowering the shared
+     `internal/ui/panel` `minHeight` clamp from 3 to 1 (it was silently
+     forcing the 1-line Status panel to 3 content lines) and making the
+     Tasks panel (`internal/ui/tasklist`) stretch-fill its assigned height
+     instead of sizing purely from its task count. Tasks panel scrolling
+     (for when task count exceeds the visible height) was explicitly
+     deferred by the user as a follow-up feature — not yet scoped or
+     implemented; Tasks currently overflows unclipped if there are more
+     tasks than fit.
   2. **Status panel (key 1)** — shows the ID, status, and project of
      whatever task is currently selected in Tasks; updates live as the
      Tasks cursor moves.

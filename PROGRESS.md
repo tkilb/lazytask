@@ -21,6 +21,19 @@
     `╭──[1]-Status────╮`) instead of a separate content row, reclaiming a
     row of height per panel, and the Tasks panel shows its `[2]-Tasks`
     number-key hint consistently with the other panels.
+    - ✅ Follow-up layout refinement (ad-hoc, direct instruction) also
+      done: Projects and Tags moved from two stacked rows into one row of
+      two half-width panels at the bottom of the left column; row heights
+      are now static instead of an even split (Status fixed at 1 content
+      line, Tasks gets the largest share, Projects/Tags share the rest —
+      tuned to ~67%/33% of the non-Status height per user feedback).
+      Fixed two related bugs found along the way: `internal/ui/panel`'s
+      `minHeight` clamp (3 → 1) was forcing Status to 3 lines instead of
+      1, and `internal/ui/tasklist`'s `View()` now stretch-fills its
+      assigned height instead of sizing purely from task count (it
+      previously left a gap at the bottom of the left column). Tasks
+      panel scrolling was explicitly deferred by the user as a follow-up
+      feature (see "Up Next" below) — not implemented yet.
   - 🔜 Chunk 2 (Status panel, key 1) is next, pending sign-off.
 
 ## Up Next
@@ -30,7 +43,8 @@ Next work comes from requirements.md §7 "Future Phases":
 - **Phase 2 — Navigation & Discovery**: Chunk 1 of general panel layout is
   done (see above); Chunk 2 (Status panel, key 1) needs sign-off to start;
   popups for warnings/errors still needs a UX discussion before it can be
-  chunked.
+  chunked; Tasks panel scrolling (deferred during the Chunk 1 layout
+  refinement) still needs to be scoped/chunked.
 - **Phase 3 — Customization**: configurable keymaps via YAML, custom
   user-defined tasks/actions via YAML.
 - **Phase 4 — Data Safety & Sync**: undo stack, taskwarrior sync support.
