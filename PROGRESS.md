@@ -70,8 +70,20 @@
     `FocusedColor`/`UnfocusedColor` border styling. A related tangent
     (theming/configurable colors) was raised but explicitly deferred; it's
     logged as a new Phase 3 backlog item in requirements.md, not started.
-  - 🔜 Chunk 4 (Shared filter state + Projects panel, key 3) is next,
-    pending sign-off.
+  - ✅ **Chunk 4 (Shared filter state + Projects panel, key 3) — DONE.**
+    New `filterState` struct (`cmd/lazytask/filter.go`, project as
+    `*string`) plus an `internal/ui/projects` panel listing distinct
+    project names from an unfiltered query, so the list doesn't shrink as
+    the filter is applied. Special entries `(all)` (clear filter) and
+    `(none)` (`project:` empty) always sort first, `(all)` then `(none)`,
+    ahead of real projects — settled on this label style after trying a
+    few alternatives. Follow-up (direct instruction): navigating the
+    Projects panel (`↑/k`/`↓/j`) now auto-applies the filter and refetches
+    Tasks immediately, instead of requiring `enter`; added
+    `filterState.equal` to compare filters by value (needed since the
+    `*string` project field breaks plain `==`/`!=`) so nav that doesn't
+    change the selection doesn't trigger a redundant refetch.
+  - 🔜 Chunk 5 (Tags panel, key 4) is next, pending sign-off.
 - ✅ **Global vs. local keybinding architecture + Done/Deleted task
   reopen/restore/purge — DONE.** Ad-hoc feature (direct instruction, not
   from the Section 7 backlog), delivered as 3 signed-off chunks plus
@@ -103,11 +115,11 @@
 
 Next work comes from requirements.md §7 "Future Phases":
 
-- **Phase 2 — Navigation & Discovery**: Chunks 1-3 of general panel layout
-  are done (see above); Chunk 4 (shared filter state + Projects panel)
-  needs sign-off to start; popups for warnings/errors are done (see
-  above); Tasks panel scrolling (deferred during the Chunk 1 layout
-  refinement) still needs to be scoped/chunked.
+- **Phase 2 — Navigation & Discovery**: Chunks 1-4 of general panel layout
+  are done (see above); Chunk 5 (Tags panel) needs sign-off to start;
+  popups for warnings/errors are done (see above); Tasks panel scrolling
+  (deferred during the Chunk 1 layout refinement) still needs to be
+  scoped/chunked.
 - **Phase 3 — Customization**: theming/configurable colors (newly logged,
   needs a YAML schema decision), configurable keymaps via YAML, custom
   user-defined tasks/actions via YAML.

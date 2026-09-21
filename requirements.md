@@ -230,17 +230,22 @@ begins, since scope/design may shift by the time we get there.
      dim gray) separate from the panel's own `FocusedColor`/`UnfocusedColor`
      border styling. Raised, but explicitly deferred, a related tangent:
      theming/configurable colors — logged below under Phase 3.
-  4. **Shared filter state + Projects panel (key 3)** — introduces a
-     filter-state struct (project + tag) in the top-level model; new panel
-     lists distinct projects, with `*none*` (no project) and `*all*` (no
-     project filtering) entries at the bottom, wrapped in `*` to mark them
-     as special. Selecting a project updates filter state and refetches
-     Tasks with `project:X`. **Open design item to resolve when this chunk
-     starts:** the Projects/Tags lists must be sourced from an unfiltered
-     task query (e.g. `status:pending or status:completed`), not from
-     whatever the Tasks panel's active filter currently returns — otherwise
-     applying a filter would shrink the very lists used to change/clear
-     that filter.
+  4. ~~**Shared filter state + Projects panel (key 3)**~~ — **DONE.**
+     Added a `filterState` struct (project as `*string`; nil = no filter) in
+     `cmd/lazytask/filter.go`, plus a new `internal/ui/projects` panel
+     listing distinct project names sourced from an unfiltered `task
+     export` query (so the list doesn't shrink as the filter is applied).
+     The list's special entries are `(all)` (clears the project filter) and
+     `(none)` (filters to tasks with no project, `project:`), always sorted
+     first — `(all)` then `(none)` — ahead of the real project names
+     (several label spellings were tried, e.g. `*all*`/`*none*`; `(all)`/
+     `(none)` was the final pick). Moving the cursor in the Projects panel
+     (`↑/k`/`↓/j`) auto-applies the corresponding filter and refetches Tasks
+     immediately — no `enter` press needed, based on follow-up feedback
+     that navigating should be enough. A `filterState.equal` method was
+     added since `filterState`'s `*string` project field can't be compared
+     with `==`/`!=` by value, which is needed to avoid redundant refetches
+     when the cursor moves without actually changing the selected filter.
   5. **Tags panel (key 4)** — same pattern as Projects, built on the
      filter-state infra from Chunk 4: lists distinct tags, with an `*any*`
      entry first (wrapped in `*`), selecting a tag sets a `+tag` filter.

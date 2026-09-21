@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,6 +17,7 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/panel"
 	"github.com/tkilb/lazytask/internal/ui/popup"
+	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/statusbar"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 )
@@ -131,6 +133,14 @@ var tasksLocalBindings = []statusbar.Binding{
 	{Key: "e", Label: "edit"},
 }
 
+// projectsLocalBindings are only active while the Projects panel has
+// focus: navigating the list automatically updates the shared project
+// filter.
+var projectsLocalBindings = []statusbar.Binding{
+	{Key: "↑/k", Label: "up"},
+	{Key: "↓/j", Label: "down"},
+}
+
 // statusBindings returns the keybinding hints to show in the status bar for
 // the model's current focus: global bindings always apply, and Tasks-panel
 // bindings are appended only while that panel is focused (local bindings
@@ -159,6 +169,9 @@ func (m model) statusBindings() []statusbar.Binding {
 		case tasklist.TabDeleted:
 			bindings = append(bindings, statusbar.Binding{Key: "r", Label: "restore"})
 		}
+	}
+	if m.focus == focusProjects {
+		bindings = append(bindings, projectsLocalBindings...)
 	}
 	return bindings
 }
@@ -219,6 +232,19 @@ type tasksLoadedMsg struct {
 
 // tasksErrMsg carries the error from a failed task fetch.
 type tasksErrMsg struct {
+	err error
+}
+
+// projectsLoadedMsg carries the distinct, sorted project names for the
+// Projects panel, sourced from an unfiltered task query (see
+// fetchProjects) rather than whatever filter the Tasks panel currently
+// has applied.
+type projectsLoadedMsg struct {
+	projects []string
+}
+
+// projectsErrMsg carries the error from a failed projects fetch.
+type projectsErrMsg struct {
 	err error
 }
 
@@ -296,6 +322,8 @@ type model struct {
 	focus          panelFocus
 	width          int
 	height         int
+	projects       projects.Model
+	filter         filterState
 }
 
 func initialModel() model {
@@ -310,14 +338,17 @@ func initialModel() model {
 		importer: client,
 		list:     tasklist.New(nil).SetFocused(true),
 		add:      addform.New(),
+		projects: projects.New(),
 	}
 }
 
-// setFocus updates which panel has focus, keeping the Tasks list's own
-// focused flag (used for its border highlight) in sync.
+// setFocus updates which panel has focus, keeping the Tasks list's and
+// Projects panel's own focused flags (used for their border highlight) in
+// sync.
 func (m model) setFocus(f panelFocus) model {
 	m.focus = f
 	m.list = m.list.SetFocused(f == focusTasks)
+	m.projects = m.projects.SetFocused(f == focusProjects)
 	return m
 }
 
@@ -372,16 +403,62 @@ func subColumnWidths(leftWidth int) (firstWidth, secondWidth int) {
 	return firstWidth, secondWidth
 }
 
-// fetchTasks returns a tea.Cmd that loads tasks matching filter (e.g. the
-// currently selected status tab's filter) via reader.
-func fetchTasks(reader TaskReader, filter string) tea.Cmd {
+// fetchTasks returns a tea.Cmd that loads tasks matching filters (the
+// currently selected status tab's filter, plus any active project filter)
+// via reader.
+func fetchTasks(reader TaskReader, filters ...string) tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := reader.Export(context.Background(), filter)
+		tasks, err := reader.Export(context.Background(), filters...)
 		if err != nil {
 			return tasksErrMsg{err: err}
 		}
 		return tasksLoadedMsg{tasks: tasks}
 	}
+}
+
+// taskFilters returns the full set of `task export` filter fragments for
+// the model's current state: the active status tab, plus any project
+// filter selected in the Projects panel.
+func (m model) taskFilters() []string {
+	filters := []string{m.list.StatusFilter()}
+	if pf := m.filter.taskFilter(); pf != "" {
+		filters = append(filters, pf)
+	}
+	return filters
+}
+
+// fetchProjects returns a tea.Cmd that loads the distinct project names
+// across all pending and completed tasks (deliberately excluding deleted
+// tasks). This deliberately ignores whatever status tab or project filter
+// the Tasks panel currently has applied: otherwise applying a project
+// filter would shrink the very list used to change/clear that filter.
+func fetchProjects(reader TaskReader) tea.Cmd {
+	return func() tea.Msg {
+		tasks, err := reader.Export(context.Background(), "status:pending", "or", "status:completed")
+		if err != nil {
+			return projectsErrMsg{err: err}
+		}
+		return projectsLoadedMsg{projects: distinctProjects(tasks)}
+	}
+}
+
+// distinctProjects returns the sorted set of distinct, non-empty project
+// names found across tasks.
+func distinctProjects(tasks []taskwarrior.Task) []string {
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, t := range tasks {
+		if t.Project == "" {
+			continue
+		}
+		if _, ok := seen[t.Project]; ok {
+			continue
+		}
+		seen[t.Project] = struct{}{}
+		names = append(names, t.Project)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // addTask returns a tea.Cmd that creates a new task via adder.
@@ -508,7 +585,7 @@ func editTaskCallback(importer TaskImporter, session *editor.Session, original t
 }
 
 func (m model) Init() tea.Cmd {
-	return fetchTasks(m.reader, m.list.StatusFilter())
+	return tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -542,10 +619,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		leftWidth, _, _, tasksHeight, _, _ := m.gridDims()
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: tasksHeight})
-		return m, cmd
+		leftWidth, _, _, tasksHeight, bottomHeight, _ := m.gridDims()
+		projectsWidth, _ := subColumnWidths(leftWidth)
+		var listCmd, projectsCmd tea.Cmd
+		m.list, listCmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: tasksHeight})
+		m.projects, projectsCmd = m.projects.Update(tea.WindowSizeMsg{Width: projectsWidth, Height: bottomHeight})
+		return m, tea.Batch(listCmd, projectsCmd)
 	case tea.KeyMsg:
 		// Global bindings apply no matter which panel has focus: they only
 		// ever touch app lifecycle or panel focus itself, never
@@ -564,6 +643,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.setFocus(prevFocus(m.focus))
 			return m, nil
 		}
+		// Projects-panel-local: navigation (up/down/j/k) is applied
+		// directly here, rather than being delegated to the bottom
+		// routing block, because moving the cursor also needs to update
+		// the shared filter and refetch Tasks immediately (no "enter"
+		// required).
+		if m.focus == focusProjects {
+			var cmd tea.Cmd
+			m.projects, cmd = m.projects.Update(msg)
+			if label, ok := m.projects.Selected(); ok {
+				newFilter := m.filter.withProjectSelection(label)
+				if !newFilter.equal(m.filter) {
+					m.filter = newFilter
+					return m, tea.Batch(cmd, fetchTasks(m.reader, m.taskFilters()...))
+				}
+			}
+			return m, cmd
+		}
 		// Everything else is local to the Tasks panel and only fires while
 		// it has focus (lazygit-style global/local keybinding split).
 		if m.focus != focusTasks {
@@ -572,10 +668,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "[":
 			m.list = m.list.PrevStatus()
-			return m, fetchTasks(m.reader, m.list.StatusFilter())
+			return m, fetchTasks(m.reader, m.taskFilters()...)
 		case "]":
 			m.list = m.list.NextStatus()
-			return m, fetchTasks(m.reader, m.list.StatusFilter())
+			return m, fetchTasks(m.reader, m.taskFilters()...)
 		case "a":
 			m.adding = true
 			m.add = m.add.Focus()
@@ -624,45 +720,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tasksErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
+	case projectsLoadedMsg:
+		m.projects = m.projects.SetProjects(msg.projects)
+		return m, nil
+	case projectsErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
 	case taskAddedMsg:
 		m.add = m.add.Reset()
 		m.pendingFocusID = msg.id
-		return m, fetchTasks(m.reader, m.list.StatusFilter())
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskAddErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
-		return m, fetchTasks(m.reader, m.list.StatusFilter())
+		return m, fetchTasks(m.reader, m.taskFilters()...)
 	case taskDoneErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
-		return m, fetchTasks(m.reader, m.list.StatusFilter())
+		return m, fetchTasks(m.reader, m.taskFilters()...)
 	case taskDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskRestoredMsg:
-		return m, fetchTasks(m.reader, m.list.StatusFilter())
+		return m, fetchTasks(m.reader, m.taskFilters()...)
 	case taskRestoreErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPurgedMsg:
-		return m, fetchTasks(m.reader, m.list.StatusFilter())
+		return m, fetchTasks(m.reader, m.taskFilters()...)
 	case taskPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
-		return m, fetchTasks(m.reader, m.list.StatusFilter())
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskEditErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	}
 
 	// Remaining messages (e.g. up/down/j/k navigation) only apply to the
-	// Tasks panel, and only reach it while it has focus.
+	// Tasks or Projects panel, and only reach each while it has focus.
 	if m.focus == focusTasks {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+	}
+	if m.focus == focusProjects {
+		var cmd tea.Cmd
+		m.projects, cmd = m.projects.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -910,17 +1017,17 @@ func (m model) statusPanelContent() string {
 // renderGrid lays out the lazygit-style panel grid: a left column of 3
 // stacked rows (Status, Tasks, and a bottom row splitting Projects/Tags
 // into side-by-side subcolumns) and one large panel (Details) filling the
-// right column. Only the Tasks panel (slot 2) has real content so far; the
-// rest are placeholders until later chunks.
+// right column. Tasks (slot 2) and Projects (slot 3) have real content;
+// Tags and Details remain placeholders until later chunks.
 func (m model) renderGrid() string {
 	leftWidth, rightWidth, statusHeight, _, bottomHeight, fullHeight := m.gridDims()
-	projectsWidth, tagsWidth := subColumnWidths(leftWidth)
+	_, tagsWidth := subColumnWidths(leftWidth)
 
 	status := panel.Render(panelTitle(focusStatus), m.statusPanelContent(), leftWidth, statusHeight, m.focus == focusStatus)
 	tasksPanel := m.list.View()
-	projects := panel.Render(panelTitle(focusProjects), "(coming soon)", projectsWidth, bottomHeight, m.focus == focusProjects)
+	projectsPanel := m.projects.View()
 	tags := panel.Render(panelTitle(focusTags), "(coming soon)", tagsWidth, bottomHeight, m.focus == focusTags)
-	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, projects, tags)
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, projectsPanel, tags)
 
 	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, bottomRow)
 

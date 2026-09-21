@@ -15,6 +15,7 @@ import (
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/popup"
+	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 )
 
@@ -117,6 +118,36 @@ func (s *stubImporter) Import(ctx context.Context, data []byte) error {
 	return s.err
 }
 
+// runBatch executes cmd, and if it returns a tea.BatchMsg (e.g. from
+// refreshes that now fetch tasks and projects concurrently via
+// tea.Batch), executes each of the batched sub-commands as well,
+// returning all resulting messages in encounter order.
+func runBatch(cmd tea.Cmd) []tea.Msg {
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		return []tea.Msg{msg}
+	}
+	var msgs []tea.Msg
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		msgs = append(msgs, runBatch(c)...)
+	}
+	return msgs
+}
+
+// findTasksLoaded returns the first tasksLoadedMsg in msgs, if any.
+func findTasksLoaded(msgs []tea.Msg) (tasksLoadedMsg, bool) {
+	for _, m := range msgs {
+		if tm, ok := m.(tasksLoadedMsg); ok {
+			return tm, true
+		}
+	}
+	return tasksLoadedMsg{}, false
+}
+
 func TestModelInit_FetchesTasks(t *testing.T) {
 	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
 	m := model{reader: reader, list: tasklist.New(nil)}
@@ -124,8 +155,7 @@ func TestModelInit_FetchesTasks(t *testing.T) {
 	cmd := m.Init()
 	assert.NotNil(t, cmd)
 
-	msg := cmd()
-	loaded, ok := msg.(tasksLoadedMsg)
+	loaded, ok := findTasksLoaded(runBatch(cmd))
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
 }
@@ -449,11 +479,11 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 	m = newModel.(model)
 	require.NotNil(t, refreshCmd)
 
-	refreshMsg := refreshCmd()
-	loaded, ok := refreshMsg.(tasksLoadedMsg)
+	refreshMsg := runBatch(refreshCmd)
+	loaded, ok := findTasksLoaded(refreshMsg)
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
-	assert.Equal(t, 1, reader.calls)
+	assert.Equal(t, 2, reader.calls) // one for tasks, one for the projects panel
 }
 
 func TestModelUpdate_AddingSubmitEmptyDescriptionShowsWarningPopup(t *testing.T) {
@@ -491,8 +521,7 @@ func TestModelUpdate_TaskAddedMsgTriggersRefresh(t *testing.T) {
 	m = newModel.(model)
 	require.NotNil(t, cmd)
 
-	msg := cmd()
-	loaded, ok := msg.(tasksLoadedMsg)
+	loaded, ok := findTasksLoaded(runBatch(cmd))
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
 }
@@ -513,8 +542,8 @@ func TestModelUpdate_TaskAddedMsg_FocusesNewlyCreatedTask(t *testing.T) {
 
 	// The subsequent refresh should select task 3 and clear the pending
 	// focus so later refreshes (from unrelated actions) don't re-apply it.
-	msg := cmd()
-	loaded := msg.(tasksLoadedMsg)
+	loaded, ok := findTasksLoaded(runBatch(cmd))
+	require.True(t, ok)
 	newModel, _ = m.Update(loaded)
 	m = newModel.(model)
 
@@ -1090,8 +1119,7 @@ func TestModelUpdate_TaskEditedMsgTriggersRefresh(t *testing.T) {
 	assert.False(t, m.popups.Active())
 	require.NotNil(t, cmd)
 
-	msg := cmd()
-	loaded, ok := msg.(tasksLoadedMsg)
+	loaded, ok := findTasksLoaded(runBatch(cmd))
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
 }
@@ -1237,6 +1265,83 @@ func TestModelUpdate_NavigationOnlyReachesListWhenTasksFocused(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 1, selected.ID)
 	})
+}
+
+// TestModelUpdate_ProjectsNavigationOnlyWhenFocused verifies up/down
+// navigation reaches the Projects panel only while it has focus, mirroring
+// the existing Tasks-panel behavior.
+func TestModelUpdate_ProjectsNavigationOnlyWhenFocused(t *testing.T) {
+	t.Run("forwarded when Projects panel focused", func(t *testing.T) {
+		m := model{list: tasklist.New(nil), projects: projects.New().SetProjects([]string{"home", "work"}), focus: focusProjects}
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(model)
+		selected, ok := m.projects.Selected()
+		require.True(t, ok)
+		assert.Equal(t, projects.NoneLabel, selected, "(all) is pinned first, (none) second, ahead of real projects")
+	})
+
+	t.Run("not forwarded when another panel focused", func(t *testing.T) {
+		m := model{list: tasklist.New(nil), projects: projects.New().SetProjects([]string{"home", "work"}), focus: focusStatus}
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(model)
+		selected, ok := m.projects.Selected()
+		require.True(t, ok)
+		assert.Equal(t, projects.AllLabel, selected)
+	})
+}
+
+// TestModelUpdate_ProjectsNavigationAutoFiltersAndRefetchesTasks verifies
+// that moving the Projects panel cursor immediately updates the shared
+// filter state and triggers a Tasks refetch including the resulting
+// project: filter, with no "enter" press required.
+func TestModelUpdate_ProjectsNavigationAutoFiltersAndRefetchesTasks(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk", Project: "home"}}}
+	m := model{
+		reader:   reader,
+		list:     tasklist.New(nil),
+		projects: projects.New().SetProjects([]string{"home", "work"}),
+		focus:    focusProjects,
+	}
+
+	// (all) -> (none): filters to tasks with no project at all.
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+	require.NotNil(t, m.filter.project)
+	assert.Equal(t, "", *m.filter.project)
+	require.NotNil(t, cmd)
+
+	// (none) -> home: now a project filter applies, so Tasks refetches.
+	newModel, cmd = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+	require.NotNil(t, m.filter.project)
+	assert.Equal(t, "home", *m.filter.project)
+	assert.Equal(t, []string{"status:pending", "project:home"}, m.taskFilters())
+
+	loaded, ok := findTasksLoaded(runBatch(cmd))
+	require.True(t, ok)
+	assert.Equal(t, reader.tasks, loaded.tasks)
+}
+
+// TestModelUpdate_ProjectsNavigatingBackToAllClearsFilter verifies
+// navigating the cursor back onto (all) clears any active project filter
+// and refetches Tasks.
+func TestModelUpdate_ProjectsNavigatingBackToAllClearsFilter(t *testing.T) {
+	m := model{
+		reader:   &stubReader{},
+		list:     tasklist.New(nil),
+		projects: projects.New().SetProjects([]string{"home"}),
+		focus:    focusProjects,
+		filter:   filterState{}.withProjectSelection("home"),
+	}
+	// Cursor starts on (all) by default, but the filter is already set to
+	// "home" above (simulating a prior selection), so moving up (clamped,
+	// staying on (all)) should re-apply and clear the filter.
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+	assert.Nil(t, m.filter.project)
+	assert.Equal(t, []string{"status:pending"}, m.taskFilters())
 }
 
 func TestModelUpdate_WindowSizeMsgResizesListPanel(t *testing.T) {
