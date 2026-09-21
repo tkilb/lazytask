@@ -21,6 +21,44 @@ const (
 	minPanelWidth = 60
 )
 
+// StatusTab identifies which of the Tasks panel's status tabs
+// (Todo/Done/Deleted) is currently selected.
+type StatusTab int
+
+const (
+	TabTodo StatusTab = iota
+	TabDone
+	TabDeleted
+)
+
+// statusTabs is the fixed cycle order used by NextStatus/PrevStatus and by
+// View when rendering the title's tab row.
+var statusTabs = []StatusTab{TabTodo, TabDone, TabDeleted}
+
+// Label returns the display name shown in the panel title for this tab.
+func (t StatusTab) Label() string {
+	switch t {
+	case TabDone:
+		return "Done"
+	case TabDeleted:
+		return "Deleted"
+	default:
+		return "Todo"
+	}
+}
+
+// Filter returns the `task export` status filter corresponding to this tab.
+func (t StatusTab) Filter() string {
+	switch t {
+	case TabDone:
+		return "status:completed"
+	case TabDeleted:
+		return "status:deleted"
+	default:
+		return "status:pending"
+	}
+}
+
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -38,6 +76,7 @@ type Model struct {
 	width   int
 	height  int
 	focused bool
+	status  StatusTab
 }
 
 // New constructs a Model over the given tasks. The list starts with the
@@ -86,6 +125,37 @@ func (m Model) SelectID(id int) Model {
 // highlight (see internal/ui/panel).
 func (m Model) SetFocused(focused bool) Model {
 	m.focused = focused
+	return m
+}
+
+// Status returns the currently selected status tab (Todo/Done/Deleted).
+func (m Model) Status() StatusTab {
+	return m.status
+}
+
+// StatusFilter returns the `task export` filter for the currently selected
+// status tab, for callers (main.go) that need to refetch tasks.
+func (m Model) StatusFilter() string {
+	return m.status.Filter()
+}
+
+// NextStatus cycles forward through the Todo/Done/Deleted tabs (bound to
+// `]`), resetting the cursor since the underlying task set is about to
+// change.
+func (m Model) NextStatus() Model {
+	return m.setStatus((int(m.status) + 1) % len(statusTabs))
+}
+
+// PrevStatus cycles backward through the Todo/Done/Deleted tabs (bound to
+// `[`), resetting the cursor since the underlying task set is about to
+// change.
+func (m Model) PrevStatus() Model {
+	return m.setStatus((int(m.status) - 1 + len(statusTabs)) % len(statusTabs))
+}
+
+func (m Model) setStatus(i int) Model {
+	m.status = statusTabs[i]
+	m.cursor = 0
 	return m
 }
 
@@ -166,7 +236,11 @@ func (m Model) View() string {
 		contentHeight = innerHeight
 	}
 
-	return panel.Frame("2 Tasks", body, innerWidth, contentHeight, m.focused)
+	tabs := make([]panel.Tab, len(statusTabs))
+	for i, t := range statusTabs {
+		tabs[i] = panel.Tab{Label: t.Label(), Active: t == m.status}
+	}
+	return panel.FrameTabs('2', tabs, body, innerWidth, contentHeight, m.focused)
 }
 
 // formatRow lays out the fixed-width columns used by both the header and

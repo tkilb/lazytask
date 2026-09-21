@@ -20,6 +20,16 @@ const (
 	// panel.
 	FocusedColor = lipgloss.Color("212")
 
+	// activeTabColor highlights the selected tab in a FrameTabs title. It
+	// is deliberately distinct from both FocusedColor and inactiveTabColor
+	// so the active tab stays visually identifiable even when the panel
+	// itself is focused (and its border/prefix are already FocusedColor).
+	activeTabColor = lipgloss.Color("214")
+	// inactiveTabColor is used for the non-selected tabs in a FrameTabs
+	// title, deliberately independent of panel focus so it doesn't compete
+	// with activeTabColor.
+	inactiveTabColor = lipgloss.Color("245")
+
 	// minWidth/minHeight guard against nonsensical (zero or negative)
 	// panel sizes, e.g. before the first tea.WindowSizeMsg arrives. minHeight
 	// is deliberately just 1 content row (rather than enough for a header
@@ -82,10 +92,31 @@ func InnerSize(outerWidth, outerHeight int) (width, height int) {
 // in a rounded border of exactly width+2 x height+2, with title embedded in
 // the top border line rather than as a separate content row.
 func Frame(title, body string, width, height int, focused bool) string {
-	color := borderColor(focused)
-	lineStyle := lipgloss.NewStyle().Foreground(color)
-
+	lineStyle := lipgloss.NewStyle().Foreground(borderColor(focused))
 	top := topBorder(title, width, focused, lineStyle)
+	return frameBody(top, body, width, height, lineStyle)
+}
+
+// Tab describes one segment of a multi-tab panel title (see FrameTabs),
+// e.g. the Tasks panel's Todo/Done/Deleted status tabs.
+type Tab struct {
+	Label  string
+	Active bool
+}
+
+// FrameTabs is like Frame, but embeds a row of tabs in the title instead of
+// a single label (e.g. "╭─[2]-Todo - Done - Deleted─╮"), styling the
+// active tab distinctly (inverted) from the others so the current tab is
+// visually obvious.
+func FrameTabs(number rune, tabs []Tab, body string, width, height int, focused bool) string {
+	lineStyle := lipgloss.NewStyle().Foreground(borderColor(focused))
+	top := topBorderTabs(number, tabs, width, focused, lineStyle)
+	return frameBody(top, body, width, height, lineStyle)
+}
+
+// frameBody renders the shared border/content assembly used by both Frame
+// and FrameTabs, given an already-built top border line.
+func frameBody(top, body string, width, height int, lineStyle lipgloss.Style) string {
 	bottom := lineStyle.Render("╰" + strings.Repeat("─", width) + "╯")
 
 	// Height/Width here size only the content area; the border characters
@@ -124,6 +155,61 @@ func topBorder(title string, width int, focused bool, lineStyle lipgloss.Style) 
 	var b strings.Builder
 	b.WriteString(lineStyle.Render("╭" + strings.Repeat("─", leadDashes)))
 	b.WriteString(TitleStyle(focused).Render(label))
+	b.WriteString(lineStyle.Render(strings.Repeat("─", fill) + "╮"))
+	return b.String()
+}
+
+// activeTabStyle highlights whichever tab is currently selected within a
+// FrameTabs title using activeTabColor, distinct from both the panel's
+// focus-dependent border/prefix color and inactiveTabStyle, so the active
+// tab is identifiable regardless of whether the panel itself has focus.
+func activeTabStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(activeTabColor)
+}
+
+// inactiveTabStyle is used for the non-selected tabs in a FrameTabs title.
+// It deliberately does not vary with panel focus (unlike TitleStyle), so it
+// never collides with activeTabColor when the panel is focused.
+func inactiveTabStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(inactiveTabColor)
+}
+
+// topBorderTabs builds the top border line for FrameTabs, e.g.
+// "╭──[2]-Todo - Done - Deleted────╮", with the active tab styled
+// distinctly from the others. If the full tab row doesn't fit within
+// width, it falls back to a single truncated, unstyled label (via
+// topBorder) rather than trying to partially render styled tabs.
+func topBorderTabs(number rune, tabs []Tab, width int, focused bool, lineStyle lipgloss.Style) string {
+	prefix := "[" + string(number) + "]-"
+
+	labels := make([]string, len(tabs))
+	for i, t := range tabs {
+		labels[i] = t.Label
+	}
+	plain := prefix + strings.Join(labels, " - ")
+
+	const leadDashes = 2
+	if len(plain) > width {
+		return topBorder(plain, width, focused, lineStyle)
+	}
+
+	var b strings.Builder
+	b.WriteString(lineStyle.Render("╭" + strings.Repeat("─", leadDashes)))
+	b.WriteString(TitleStyle(focused).Render(prefix))
+	for i, t := range tabs {
+		if i > 0 {
+			b.WriteString(inactiveTabStyle().Render(" - "))
+		}
+		style := inactiveTabStyle()
+		if t.Active {
+			style = activeTabStyle()
+		}
+		b.WriteString(style.Render(t.Label))
+	}
+	fill := width - leadDashes - len(plain)
+	if fill < 0 {
+		fill = 0
+	}
 	b.WriteString(lineStyle.Render(strings.Repeat("─", fill) + "╮"))
 	return b.String()
 }

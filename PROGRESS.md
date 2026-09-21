@@ -53,19 +53,37 @@
     selected in Tasks (with `(none)` placeholders for empty project/tags),
     read live off the Tasks list's current selection on every render — no
     extra state to keep in sync.
-  - 🔜 Chunk 3 (Tasks panel status tabs, Todo/Done/Deleted) is next,
+  - ✅ **Chunk 3 (Tasks panel status tabs, Todo/Done/Deleted) — DONE.**
+    Tasks panel now has 3 tabs (Todo/Done/Deleted), cycled via `[`/`]`,
+    each re-querying `task export` with the matching
+    `status:pending`/`status:completed`/`status:deleted` filter; title
+    renders as `[2]-Todo - Done - Deleted` with the active tab visually
+    distinct, via a new `panel.FrameTabs` helper. Two follow-up ad-hoc
+    styling passes (direct instruction, same in-flight chunk): the active
+    tab first switched from an inverted/reverse-video highlight to a solid
+    focus-colored label, then — to fix a contrast bug where the whole
+    title (border, `[2]-` prefix, and active tab) rendered uniformly
+    magenta whenever the Tasks panel itself was focused, making the active
+    tab indistinguishable — the active/inactive tab colors were split into
+    their own focus-independent constants (`activeTabColor` orange,
+    `inactiveTabColor` dim gray), separate from the panel's own
+    `FocusedColor`/`UnfocusedColor` border styling. A related tangent
+    (theming/configurable colors) was raised but explicitly deferred; it's
+    logged as a new Phase 3 backlog item in requirements.md, not started.
+  - 🔜 Chunk 4 (Shared filter state + Projects panel, key 3) is next,
     pending sign-off.
 
 ## Up Next
 
 Next work comes from requirements.md §7 "Future Phases":
 
-- **Phase 2 — Navigation & Discovery**: Chunks 1-2 of general panel layout
-  are done (see above); Chunk 3 (Tasks panel status tabs) needs sign-off
-  to start; popups for warnings/errors are done (see above); Tasks panel
-  scrolling (deferred during the Chunk 1 layout refinement) still needs to
-  be scoped/chunked.
-- **Phase 3 — Customization**: configurable keymaps via YAML, custom
+- **Phase 2 — Navigation & Discovery**: Chunks 1-3 of general panel layout
+  are done (see above); Chunk 4 (shared filter state + Projects panel)
+  needs sign-off to start; popups for warnings/errors are done (see
+  above); Tasks panel scrolling (deferred during the Chunk 1 layout
+  refinement) still needs to be scoped/chunked.
+- **Phase 3 — Customization**: theming/configurable colors (newly logged,
+  needs a YAML schema decision), configurable keymaps via YAML, custom
   user-defined tasks/actions via YAML.
 - **Phase 4 — Data Safety & Sync**: undo stack, taskwarrior sync support.
 

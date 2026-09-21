@@ -708,7 +708,7 @@ func TestModelView_RendersGridWithAllPanelTitles(t *testing.T) {
 	m := model{list: tasklist.New(nil), add: addform.New()}
 	view := m.View()
 
-	for _, want := range []string{"[2]-Tasks", "[1]-Status", "[3]-Projects", "[4]-Tags", "[0]-Details"} {
+	for _, want := range []string{"[2]-Todo - Done - Deleted", "[1]-Status", "[3]-Projects", "[4]-Tags", "[0]-Details"} {
 		assert.Contains(t, view, want)
 	}
 }

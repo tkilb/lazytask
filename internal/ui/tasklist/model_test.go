@@ -162,7 +162,7 @@ func TestModel_View_ContainsTaskData(t *testing.T) {
 	assert.True(t, strings.Contains(view, "Buy groceries"))
 	assert.True(t, strings.Contains(view, "Write report"))
 	assert.True(t, strings.Contains(view, "Water plants"))
-	assert.True(t, strings.Contains(view, "Tasks"))
+	assert.True(t, strings.Contains(view, "Todo"))
 }
 
 func TestModel_View_Empty(t *testing.T) {
@@ -181,4 +181,51 @@ func TestModel_SetFocused_SetsFocusedFlag(t *testing.T) {
 
 	m = m.SetFocused(false)
 	assert.False(t, m.focused)
+}
+
+func TestModel_NextStatus_CyclesTodoDoneDeleted(t *testing.T) {
+	m := New(sampleTasks())
+	assert.Equal(t, TabTodo, m.Status())
+	assert.Equal(t, "status:pending", m.StatusFilter())
+
+	m = m.NextStatus()
+	assert.Equal(t, TabDone, m.Status())
+	assert.Equal(t, "status:completed", m.StatusFilter())
+
+	m = m.NextStatus()
+	assert.Equal(t, TabDeleted, m.Status())
+	assert.Equal(t, "status:deleted", m.StatusFilter())
+
+	m = m.NextStatus()
+	assert.Equal(t, TabTodo, m.Status())
+}
+
+func TestModel_PrevStatus_CyclesBackward(t *testing.T) {
+	m := New(sampleTasks())
+
+	m = m.PrevStatus()
+	assert.Equal(t, TabDeleted, m.Status())
+
+	m = m.PrevStatus()
+	assert.Equal(t, TabDone, m.Status())
+
+	m = m.PrevStatus()
+	assert.Equal(t, TabTodo, m.Status())
+}
+
+func TestModel_NextStatus_ResetsCursor(t *testing.T) {
+	m := New(sampleTasks())
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, 1, m.cursor)
+
+	m = m.NextStatus()
+	assert.Equal(t, 0, m.cursor)
+}
+
+func TestModel_View_ShowsActiveTabHighlighted(t *testing.T) {
+	m := New(sampleTasks())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	view := m.View()
+	assert.True(t, strings.Contains(view, "[2]-Todo - Done - Deleted"))
 }

@@ -36,3 +36,18 @@ func TestTitleStyle_FocusChangesColor(t *testing.T) {
 
 	assert.NotEqual(t, focused, unfocused)
 }
+
+func TestFrameTabs_ContainsAllTabsAndBody(t *testing.T) {
+	tabs := []Tab{{Label: "Todo", Active: true}, {Label: "Done"}, {Label: "Deleted"}}
+	view := FrameTabs('2', tabs, "hello world", 60, 10, false)
+
+	assert.Contains(t, view, "[2]-Todo - Done - Deleted")
+	assert.Contains(t, view, "hello world")
+}
+
+func TestFrameTabs_FallsBackToPlainTitleWhenTooNarrow(t *testing.T) {
+	tabs := []Tab{{Label: "Todo", Active: true}, {Label: "Done"}, {Label: "Deleted"}}
+	view := FrameTabs('2', tabs, "x", 5, 3, false)
+
+	assert.NotEmpty(t, view)
+}

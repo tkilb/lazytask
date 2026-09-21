@@ -180,10 +180,22 @@ begins, since scope/design may shift by the time we get there.
      when a task has no project/tags); updates live as the Tasks cursor
      moves, since it reads the Tasks list's current selection on every
      render.
-  3. **Tasks panel status tabs (Todo/Done/Deleted)** — extends `tasklist`
-     with 3 tabs, cycled via `[`/`]` (not the panel-focus number
-     keys/Tab), each re-querying `task export` with the matching
-     `status:pending`/`status:completed`/`status:deleted` filter.
+  3. ~~**Tasks panel status tabs (Todo/Done/Deleted)**~~ — **DONE.**
+     Extends `tasklist` with 3 tabs (Todo/Done/Deleted), cycled via `[`/`]`
+     (not the panel-focus number keys/Tab), each re-querying `task export`
+     with the matching `status:pending`/`status:completed`/`status:deleted`
+     filter; title renders as `[2]-Todo - Done - Deleted` via a new
+     `panel.FrameTabs` helper. Two follow-up ad-hoc styling passes (direct
+     instruction, same in-flight chunk): the active tab first switched from
+     an inverted/reverse-video highlight to a solid focus-colored label,
+     then (to fix a contrast bug where the whole title — border, `[2]-`
+     prefix, and active tab — rendered uniformly magenta whenever the Tasks
+     panel itself was focused, making the active tab indistinguishable) the
+     active/inactive tab colors were split out into their own
+     focus-independent constants (`activeTabColor` orange, `inactiveTabColor`
+     dim gray) separate from the panel's own `FocusedColor`/`UnfocusedColor`
+     border styling. Raised, but explicitly deferred, a related tangent:
+     theming/configurable colors — logged below under Phase 3.
   4. **Shared filter state + Projects panel (key 3)** — introduces a
      filter-state struct (project + tag) in the top-level model; new panel
      lists distinct projects, with `*none*` (no project) and `*all*` (no
@@ -206,6 +218,15 @@ begins, since scope/design may shift by the time we get there.
 
 ### Phase 3 — Customization
 
+- **Theming (colors configurable via YAML)** — currently all panel
+  border/title colors live as hardcoded `lipgloss.Color` constants in
+  `internal/ui/panel` (`FocusedColor`, `UnfocusedColor`, plus the Tasks
+  panel's tab-highlight `activeTabColor`/`inactiveTabColor` added
+  alongside the status-tabs chunk). Raised as a tangent while fixing a
+  related contrast bug (the active status tab was indistinguishable from
+  the border when the Tasks panel itself was focused, since both used the
+  same focus color) — not yet scoped/chunked; needs a decision on the YAML
+  schema (named palette vs. per-role color keys) before chunking.
 - **Configurable keymaps via YAML** — user-overridable key bindings for
   existing actions (list nav, add/done/delete/edit), loaded via the existing
   YAML config plumbing. Needs a decision on config file location/precedence

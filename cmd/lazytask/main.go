@@ -113,6 +113,7 @@ var (
 		{Key: "↑/k", Label: "up"},
 		{Key: "↓/j", Label: "down"},
 		{Key: "0-4/tab", Label: "panels"},
+		{Key: "[/]", Label: "tabs"},
 		{Key: "a", Label: "add"},
 		{Key: "d", Label: "done"},
 		{Key: "x", Label: "delete"},
@@ -294,10 +295,11 @@ func subColumnWidths(leftWidth int) (firstWidth, secondWidth int) {
 	return firstWidth, secondWidth
 }
 
-// fetchTasks returns a tea.Cmd that loads pending tasks via reader.
-func fetchTasks(reader TaskReader) tea.Cmd {
+// fetchTasks returns a tea.Cmd that loads tasks matching filter (e.g. the
+// currently selected status tab's filter) via reader.
+func fetchTasks(reader TaskReader, filter string) tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := reader.Export(context.Background(), "status:pending")
+		tasks, err := reader.Export(context.Background(), filter)
 		if err != nil {
 			return tasksErrMsg{err: err}
 		}
@@ -390,7 +392,7 @@ func editTaskCallback(importer TaskImporter, session *editor.Session, original t
 }
 
 func (m model) Init() tea.Cmd {
-	return fetchTasks(m.reader)
+	return fetchTasks(m.reader, m.list.StatusFilter())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -434,7 +436,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.setFocus(prevFocus(m.focus))
 			return m, nil
 		case "r":
-			return m, fetchTasks(m.reader)
+			return m, fetchTasks(m.reader, m.list.StatusFilter())
+		case "[":
+			m.list = m.list.PrevStatus()
+			return m, fetchTasks(m.reader, m.list.StatusFilter())
+		case "]":
+			m.list = m.list.NextStatus()
+			return m, fetchTasks(m.reader, m.list.StatusFilter())
 		case "a":
 			m.adding = true
 			m.add = m.add.Focus()
@@ -468,22 +476,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskAddedMsg:
 		m.add = m.add.Reset()
 		m.pendingFocusID = msg.id
-		return m, fetchTasks(m.reader)
+		return m, fetchTasks(m.reader, m.list.StatusFilter())
 	case taskAddErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
-		return m, fetchTasks(m.reader)
+		return m, fetchTasks(m.reader, m.list.StatusFilter())
 	case taskDoneErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
-		return m, fetchTasks(m.reader)
+		return m, fetchTasks(m.reader, m.list.StatusFilter())
 	case taskDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
-		return m, fetchTasks(m.reader)
+		return m, fetchTasks(m.reader, m.list.StatusFilter())
 	case taskEditErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
