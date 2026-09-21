@@ -77,6 +77,34 @@ func (s *stubDeleter) Delete(ctx context.Context, id string) error {
 	return s.err
 }
 
+// stubRestorer is a test double for TaskRestorer, avoiding any real `task`
+// process invocation.
+type stubRestorer struct {
+	err  error
+	ids  []string
+	call int
+}
+
+func (s *stubRestorer) Restore(ctx context.Context, id string) error {
+	s.call++
+	s.ids = append(s.ids, id)
+	return s.err
+}
+
+// stubPurger is a test double for TaskPurger, avoiding any real `task`
+// process invocation.
+type stubPurger struct {
+	err  error
+	ids  []string
+	call int
+}
+
+func (s *stubPurger) Purge(ctx context.Context, id string) error {
+	s.call++
+	s.ids = append(s.ids, id)
+	return s.err
+}
+
 // stubImporter is a test double for TaskImporter, avoiding any real `task`
 // process invocation.
 type stubImporter struct {
@@ -131,19 +159,51 @@ func TestModelUpdate_TasksErrMsg(t *testing.T) {
 	assert.Equal(t, wantErr.Error(), popupMsg.Text)
 }
 
-func TestModelUpdate_RefreshKeyTriggersFetch(t *testing.T) {
+// TestModelUpdate_RKeyIsNoOpForNow documents that 'r' no longer triggers a
+// manual refresh (removed since every mutation/tab-switch already
+// refetches automatically) and is not yet bound to anything else; it's
+// reserved for the upcoming restore action (requirements.md Phase 2).
+func TestModelUpdate_RKeyIsNoOpForNow(t *testing.T) {
 	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
 	m := model{reader: reader, list: tasklist.New(nil)}
 
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
 	_, ok := newModel.(model)
 	assert.True(t, ok)
-	assert.NotNil(t, cmd)
+	assert.Nil(t, cmd)
+	assert.Equal(t, 0, reader.calls)
+}
 
-	msg := cmd()
-	_, ok = msg.(tasksLoadedMsg)
+// TestModelUpdate_TasksLocalKeysRequireTasksFocus verifies the new
+// global/local keybinding split: Tasks-panel-only actions (add/done/delete/
+// edit/tab-cycle) must not fire while some other panel has focus.
+func TestModelUpdate_TasksLocalKeysRequireTasksFocus(t *testing.T) {
+	for _, key := range []string{"a", "d", "x", "e", "[", "]"} {
+		t.Run(key, func(t *testing.T) {
+			m := model{
+				list:  tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+				focus: focusStatus,
+			}
+			newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+			mm, ok := newModel.(model)
+			assert.True(t, ok)
+			assert.Nil(t, cmd)
+			assert.False(t, mm.adding)
+			assert.False(t, mm.deleting)
+		})
+	}
+}
+
+// TestModelUpdate_GlobalKeysWorkFromAnyFocus verifies global bindings
+// (quit, panel-focus keys) still fire regardless of which panel has focus.
+func TestModelUpdate_GlobalKeysWorkFromAnyFocus(t *testing.T) {
+	m := model{list: tasklist.New(nil), focus: focusStatus}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	mm, ok := newModel.(model)
 	assert.True(t, ok)
-	assert.Equal(t, 1, reader.calls)
+	assert.True(t, mm.quitting)
+	assert.NotNil(t, cmd)
 }
 
 func TestModelUpdate_Quit(t *testing.T) {
@@ -183,15 +243,49 @@ func TestModelView(t *testing.T) {
 		assert.Contains(t, m.View(), "Error")
 	})
 
-	t.Run("shows add/refresh/quit hint", func(t *testing.T) {
-		m := model{list: tasklist.New(nil)}
+	t.Run("shows Tasks-local hints when Tasks panel is focused", func(t *testing.T) {
+		m := model{list: tasklist.New(nil)} // zero-value focus == focusTasks
 		view := m.View()
-		for _, want := range []string{"a", "add", "d", "done", "x", "delete", "e", "edit", "r", "refresh", "q", "quit"} {
+		for _, want := range []string{"a", "add", "d", "done", "x", "delete", "e", "edit", "q", "quit"} {
 			assert.Contains(t, view, want)
+		}
+		assert.NotContains(t, view, "refresh")
+	})
+
+	t.Run("hides Tasks-local hints when another panel is focused", func(t *testing.T) {
+		m := model{list: tasklist.New(nil), focus: focusStatus}
+		view := m.View()
+		assert.Contains(t, view, "quit")
+		for _, notWant := range []string{"add", "done", "delete", "edit", "refresh"} {
+			assert.NotContains(t, view, notWant)
 		}
 	})
 
-	t.Run("shows delete confirmation prompt", func(t *testing.T) {
+	t.Run("hides reopen hint on Todo tab", func(t *testing.T) {
+		m := model{list: tasklist.New(nil)} // zero-value status == TabTodo
+		assert.NotContains(t, m.View(), "reopen")
+	})
+
+	t.Run("shows reopen hint on Done tab", func(t *testing.T) {
+		m := model{list: tasklist.New(nil).NextStatus()} // Todo -> Done
+		assert.Contains(t, m.View(), "reopen")
+	})
+
+	t.Run("hides done hint on Done tab", func(t *testing.T) {
+		m := model{list: tasklist.New(nil).NextStatus()} // Todo -> Done
+		view := m.View()
+		assert.NotContains(t, view, "done")
+	})
+
+	t.Run("shows restore hint (not reopen) and purge hint (not delete) on Deleted tab", func(t *testing.T) {
+		m := model{list: tasklist.New(nil).NextStatus().NextStatus()} // Todo -> Done -> Deleted
+		view := m.View()
+		assert.Contains(t, view, "restore")
+		assert.NotContains(t, view, "reopen")
+		assert.Contains(t, view, "purge")
+	})
+
+	t.Run("shows delete confirmation prompt on Todo tab (with id)", func(t *testing.T) {
 		m := model{
 			list:     tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
 			deleting: true,
@@ -201,6 +295,69 @@ func TestModelView(t *testing.T) {
 		assert.Contains(t, view, "Confirm")
 		assert.Contains(t, view, "confirm")
 		assert.Contains(t, view, "cancel")
+	})
+
+	t.Run("shows delete confirmation prompt on Done tab (no id)", func(t *testing.T) {
+		m := model{
+			list:     tasklist.New([]taskwarrior.Task{{ID: 0, Description: "Buy milk"}}).NextStatus(),
+			deleting: true,
+		}
+		view := m.View()
+		assert.Contains(t, view, `Delete "Buy milk"?`)
+		assert.NotContains(t, view, "task 0")
+	})
+
+	t.Run("shows purge confirmation prompt (no id)", func(t *testing.T) {
+		m := model{
+			list:    tasklist.New([]taskwarrior.Task{{ID: 0, Description: "Buy milk"}}),
+			purging: true,
+		}
+		view := m.View()
+		assert.Contains(t, view, `Permanently delete "Buy milk"?`)
+		assert.Contains(t, view, "cannot be")
+		assert.Contains(t, view, "undone.")
+		assert.Contains(t, view, "Confirm")
+		assert.Contains(t, view, "confirm")
+		assert.Contains(t, view, "cancel")
+	})
+
+	t.Run("shows done confirmation prompt on Todo tab (with id)", func(t *testing.T) {
+		m := model{
+			list:       tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+			completing: true,
+		}
+		view := m.View()
+		assert.Contains(t, view, `Mark task 1 "Buy milk" as done?`)
+		assert.Contains(t, view, "Confirm")
+		assert.Contains(t, view, "confirm")
+		assert.Contains(t, view, "cancel")
+	})
+
+	t.Run("shows done confirmation prompt on Deleted tab (no id)", func(t *testing.T) {
+		m := model{
+			list:       tasklist.New([]taskwarrior.Task{{ID: 0, Description: "Buy milk"}}).NextStatus().NextStatus(),
+			completing: true,
+		}
+		view := m.View()
+		assert.Contains(t, view, `Mark "Buy milk" as done?`)
+	})
+
+	t.Run("shows reopen confirmation prompt on Done tab (no id)", func(t *testing.T) {
+		m := model{
+			list:      tasklist.New([]taskwarrior.Task{{ID: 0, Description: "Buy milk"}}).NextStatus(),
+			restoring: true,
+		}
+		view := m.View()
+		assert.Contains(t, view, `Reopen "Buy milk"?`)
+	})
+
+	t.Run("shows restore confirmation prompt on Deleted tab (no id)", func(t *testing.T) {
+		m := model{
+			list:      tasklist.New([]taskwarrior.Task{{ID: 0, Description: "Buy milk"}}).NextStatus().NextStatus(),
+			restoring: true,
+		}
+		view := m.View()
+		assert.Contains(t, view, `Restore "Buy milk" as a todo?`)
 	})
 
 	t.Run("shows add form when adding", func(t *testing.T) {
@@ -377,13 +534,49 @@ func TestModelUpdate_TaskAddErrMsgSetsErr(t *testing.T) {
 	assert.Nil(t, cmd)
 }
 
-func TestModelUpdate_DKeyMarksSelectedTaskDone(t *testing.T) {
+func TestModelUpdate_DKeyEntersCompletingMode(t *testing.T) {
 	doner := &stubDoner{}
-	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}}
-	m := model{reader: reader, doner: doner, list: tasklist.New(reader.tasks)}
+	m := model{doner: doner, list: tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}})}
 
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
 	m = newModel.(model)
+	assert.True(t, m.completing)
+	assert.Nil(t, cmd)
+	assert.Zero(t, doner.call)
+}
+
+func TestModelUpdate_DKeyNoOpOnDoneTab(t *testing.T) {
+	doner := &stubDoner{}
+	tasks := []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}
+	list := tasklist.New(tasks).NextStatus() // Todo -> Done
+	m := model{doner: doner, list: list}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = newModel.(model)
+	assert.False(t, m.completing)
+	assert.Nil(t, cmd)
+	assert.Zero(t, doner.call)
+}
+
+func TestModelUpdate_DKeyNoSelectionNoOp(t *testing.T) {
+	doner := &stubDoner{}
+	m := model{doner: doner, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = newModel.(model)
+	assert.False(t, m.completing)
+	assert.Nil(t, cmd)
+	assert.Zero(t, doner.call)
+}
+
+func TestModelUpdate_CompletingConfirmYDonesOnTodoTab(t *testing.T) {
+	doner := &stubDoner{}
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}}
+	m := model{reader: reader, doner: doner, list: tasklist.New(reader.tasks), completing: true}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = newModel.(model)
+	assert.False(t, m.completing)
 	require.NotNil(t, cmd)
 
 	msg := cmd()
@@ -401,12 +594,74 @@ func TestModelUpdate_DKeyMarksSelectedTaskDone(t *testing.T) {
 	assert.Equal(t, 1, reader.calls)
 }
 
-func TestModelUpdate_DKeyNoSelectionNoOp(t *testing.T) {
+// TestModelUpdate_CompletingConfirmYRestoresThenDonesOnDeletedTab verifies
+// the fix for a bug where marking a Deleted task done failed outright:
+// Taskwarrior's `done` command refuses to act on a non-pending task, so
+// confirming here must first restore the task to pending and only then
+// mark it done.
+func TestModelUpdate_CompletingConfirmYRestoresThenDonesOnDeletedTab(t *testing.T) {
 	doner := &stubDoner{}
-	m := model{doner: doner, list: tasklist.New(nil)}
+	restorer := &stubRestorer{}
+	tasks := []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}
+	list := tasklist.New(tasks).NextStatus().NextStatus() // Todo -> Done -> Deleted
+	m := model{doner: doner, restorer: restorer, list: list, completing: true}
 
-	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	m = newModel.(model)
+	assert.False(t, m.completing)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	_, ok := msg.(taskDoneMsg)
+	assert.True(t, ok)
+	assert.Equal(t, []string{"abc-123"}, restorer.ids)
+	assert.Equal(t, []string{"abc-123"}, doner.ids)
+}
+
+func TestModelUpdate_CompletingConfirmYRestoreErrSkipsDone(t *testing.T) {
+	doner := &stubDoner{}
+	restorer := &stubRestorer{err: errors.New("restore failed")}
+	tasks := []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}
+	list := tasklist.New(tasks).NextStatus().NextStatus() // Todo -> Done -> Deleted
+	m := model{doner: doner, restorer: restorer, list: list, completing: true}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	_ = newModel.(model)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	errMsg, ok := msg.(taskDoneErrMsg)
+	assert.True(t, ok)
+	assert.EqualError(t, errMsg.err, "restore failed")
+	assert.Zero(t, doner.call)
+}
+
+func TestModelUpdate_CompletingConfirmNCancels(t *testing.T) {
+	doner := &stubDoner{}
+	m := model{
+		doner:      doner,
+		list:       tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+		completing: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = newModel.(model)
+	assert.False(t, m.completing)
+	assert.Nil(t, cmd)
+	assert.Zero(t, doner.call)
+}
+
+func TestModelUpdate_CompletingConfirmEscCancels(t *testing.T) {
+	doner := &stubDoner{}
+	m := model{
+		doner:      doner,
+		list:       tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+		completing: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.completing)
 	assert.Nil(t, cmd)
 	assert.Zero(t, doner.call)
 }
@@ -427,6 +682,19 @@ func TestModelUpdate_XKeyEntersDeletingMode(t *testing.T) {
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = newModel.(model)
 	assert.True(t, m.deleting)
+	assert.False(t, m.purging)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_XKeyEntersPurgingModeOnDeletedTab(t *testing.T) {
+	tasks := []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}
+	list := tasklist.New(tasks).NextStatus().NextStatus() // Todo -> Done -> Deleted
+	m := model{list: list}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = newModel.(model)
+	assert.True(t, m.purging)
+	assert.False(t, m.deleting)
 	assert.Nil(t, cmd)
 }
 
@@ -468,6 +736,59 @@ func TestModelUpdate_DeletingConfirmYDeletes(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestModelUpdate_ConfirmEnterConfirmsSameAsY(t *testing.T) {
+	tasks := []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}
+	enterKey := tea.KeyMsg{Type: tea.KeyEnter}
+
+	t.Run("deleting", func(t *testing.T) {
+		deleter := &stubDeleter{}
+		m := model{deleter: deleter, list: tasklist.New(tasks), deleting: true}
+		newModel, cmd := m.Update(enterKey)
+		m = newModel.(model)
+		assert.False(t, m.deleting)
+		require.NotNil(t, cmd)
+		_, ok := cmd().(taskDeletedMsg)
+		assert.True(t, ok)
+		assert.Equal(t, []string{"abc-123"}, deleter.ids)
+	})
+
+	t.Run("purging", func(t *testing.T) {
+		purger := &stubPurger{}
+		m := model{purger: purger, list: tasklist.New(tasks), purging: true}
+		newModel, cmd := m.Update(enterKey)
+		m = newModel.(model)
+		assert.False(t, m.purging)
+		require.NotNil(t, cmd)
+		_, ok := cmd().(taskPurgedMsg)
+		assert.True(t, ok)
+		assert.Equal(t, []string{"abc-123"}, purger.ids)
+	})
+
+	t.Run("completing", func(t *testing.T) {
+		doner := &stubDoner{}
+		m := model{doner: doner, list: tasklist.New(tasks), completing: true}
+		newModel, cmd := m.Update(enterKey)
+		m = newModel.(model)
+		assert.False(t, m.completing)
+		require.NotNil(t, cmd)
+		_, ok := cmd().(taskDoneMsg)
+		assert.True(t, ok)
+		assert.Equal(t, []string{"abc-123"}, doner.ids)
+	})
+
+	t.Run("restoring", func(t *testing.T) {
+		restorer := &stubRestorer{}
+		m := model{restorer: restorer, list: tasklist.New(tasks).NextStatus(), restoring: true}
+		newModel, cmd := m.Update(enterKey)
+		m = newModel.(model)
+		assert.False(t, m.restoring)
+		require.NotNil(t, cmd)
+		_, ok := cmd().(taskRestoredMsg)
+		assert.True(t, ok)
+		assert.Equal(t, []string{"abc-123"}, restorer.ids)
+	})
+}
+
 func TestModelUpdate_DeletingConfirmNCancels(t *testing.T) {
 	deleter := &stubDeleter{}
 	m := model{
@@ -503,6 +824,230 @@ func TestModelUpdate_TaskDeleteErrMsgSetsErr(t *testing.T) {
 	wantErr := errors.New("delete failed")
 
 	newModel, cmd := m.Update(taskDeleteErrMsg{err: wantErr})
+	m = newModel.(model)
+	assertErrPopup(t, m, wantErr)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_RKeyNoOpOnTodoTab(t *testing.T) {
+	restorer := &stubRestorer{}
+	// tasklist.New defaults to the Todo tab.
+	m := model{restorer: restorer, list: tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}})}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	_ = newModel.(model)
+	assert.Nil(t, cmd)
+	assert.Zero(t, restorer.call)
+}
+
+func TestModelUpdate_RKeyRestoresSelectedTaskOnDoneTab(t *testing.T) {
+	restorer := &stubRestorer{}
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}}
+	list := tasklist.New(reader.tasks).NextStatus() // Todo -> Done
+	m := model{reader: reader, restorer: restorer, list: list}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = newModel.(model)
+	assert.True(t, m.restoring)
+	assert.Nil(t, cmd)
+	assert.Zero(t, restorer.call)
+}
+
+func TestModelUpdate_RKeyRestoresSelectedTaskOnDeletedTab(t *testing.T) {
+	restorer := &stubRestorer{}
+	tasks := []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}
+	list := tasklist.New(tasks).NextStatus().NextStatus() // Todo -> Done -> Deleted
+	m := model{restorer: restorer, list: list}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = newModel.(model)
+	assert.True(t, m.restoring)
+	assert.Nil(t, cmd)
+	assert.Zero(t, restorer.call)
+}
+
+func TestModelUpdate_RKeyNoSelectionNoOp(t *testing.T) {
+	restorer := &stubRestorer{}
+	m := model{restorer: restorer, list: tasklist.New(nil).NextStatus()}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = newModel.(model)
+	assert.False(t, m.restoring)
+	assert.Nil(t, cmd)
+	assert.Zero(t, restorer.call)
+}
+
+func TestModelUpdate_RestoringConfirmYRestoresOnDoneTab(t *testing.T) {
+	restorer := &stubRestorer{}
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}}
+	list := tasklist.New(reader.tasks).NextStatus() // Todo -> Done
+	m := model{reader: reader, restorer: restorer, list: list, restoring: true}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = newModel.(model)
+	assert.False(t, m.restoring)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	_, ok := msg.(taskRestoredMsg)
+	assert.True(t, ok)
+	assert.Equal(t, []string{"abc-123"}, restorer.ids)
+
+	// Regression: a successful restore must trigger an automatic refresh.
+	newModel, refreshCmd := m.Update(msg)
+	m = newModel.(model)
+	require.NotNil(t, refreshCmd)
+	refreshMsg := refreshCmd()
+	_, ok = refreshMsg.(tasksLoadedMsg)
+	assert.True(t, ok)
+	assert.Equal(t, 1, reader.calls)
+}
+
+func TestModelUpdate_RestoringConfirmYRestoresOnDeletedTab(t *testing.T) {
+	restorer := &stubRestorer{}
+	tasks := []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}
+	list := tasklist.New(tasks).NextStatus().NextStatus() // Todo -> Done -> Deleted
+	m := model{restorer: restorer, list: list, restoring: true}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = newModel.(model)
+	assert.False(t, m.restoring)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	_, ok := msg.(taskRestoredMsg)
+	assert.True(t, ok)
+	assert.Equal(t, []string{"abc-123"}, restorer.ids)
+}
+
+func TestModelUpdate_RestoringConfirmNCancels(t *testing.T) {
+	restorer := &stubRestorer{}
+	m := model{
+		restorer:  restorer,
+		list:      tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}).NextStatus(),
+		restoring: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = newModel.(model)
+	assert.False(t, m.restoring)
+	assert.Nil(t, cmd)
+	assert.Zero(t, restorer.call)
+}
+
+func TestModelUpdate_RestoringConfirmEscCancels(t *testing.T) {
+	restorer := &stubRestorer{}
+	m := model{
+		restorer:  restorer,
+		list:      tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}).NextStatus(),
+		restoring: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.restoring)
+	assert.Nil(t, cmd)
+	assert.Zero(t, restorer.call)
+}
+
+func TestModelUpdate_TaskRestoredMsgTriggersRefresh(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
+	m := model{reader: reader, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(taskRestoredMsg{})
+	_ = newModel.(model)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	_, ok := msg.(tasksLoadedMsg)
+	assert.True(t, ok)
+}
+
+func TestModelUpdate_TaskRestoreErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("restore failed")
+
+	newModel, cmd := m.Update(taskRestoreErrMsg{err: wantErr})
+	m = newModel.(model)
+	assertErrPopup(t, m, wantErr)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_PurgingConfirmYPurges(t *testing.T) {
+	purger := &stubPurger{}
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}}
+	m := model{
+		reader:  reader,
+		purger:  purger,
+		list:    tasklist.New(reader.tasks),
+		purging: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = newModel.(model)
+	assert.False(t, m.purging)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	_, ok := msg.(taskPurgedMsg)
+	assert.True(t, ok)
+	assert.Equal(t, []string{"abc-123"}, purger.ids)
+
+	// Regression: a successful purge must trigger an automatic refresh.
+	newModel, refreshCmd := m.Update(msg)
+	m = newModel.(model)
+	require.NotNil(t, refreshCmd)
+	refreshMsg := refreshCmd()
+	_, ok = refreshMsg.(tasksLoadedMsg)
+	assert.True(t, ok)
+}
+
+func TestModelUpdate_PurgingConfirmNCancels(t *testing.T) {
+	purger := &stubPurger{}
+	m := model{
+		purger:  purger,
+		list:    tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+		purging: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = newModel.(model)
+	assert.False(t, m.purging)
+	assert.Nil(t, cmd)
+	assert.Zero(t, purger.call)
+}
+
+func TestModelUpdate_PurgingConfirmEscCancels(t *testing.T) {
+	purger := &stubPurger{}
+	m := model{
+		purger:  purger,
+		list:    tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+		purging: true,
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.purging)
+	assert.Nil(t, cmd)
+	assert.Zero(t, purger.call)
+}
+
+func TestModelUpdate_TaskPurgedMsgTriggersRefresh(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
+	m := model{reader: reader, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(taskPurgedMsg{})
+	_ = newModel.(model)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	_, ok := msg.(tasksLoadedMsg)
+	assert.True(t, ok)
+}
+
+func TestModelUpdate_TaskPurgeErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("purge failed")
+
+	newModel, cmd := m.Update(taskPurgeErrMsg{err: wantErr})
 	m = newModel.(model)
 	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)

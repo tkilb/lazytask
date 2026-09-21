@@ -15,6 +15,8 @@ type TaskMutator interface {
 	Add(ctx context.Context, description string, extraArgs ...string) (int, error)
 	Done(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
+	Restore(ctx context.Context, id string) error
+	Purge(ctx context.Context, id string) error
 	Import(ctx context.Context, data []byte) error
 }
 
@@ -84,6 +86,29 @@ func (c *Client) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("id must not be empty")
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "delete")
+	return err
+}
+
+// Restore moves the task identified by id (a Taskwarrior ID or UUID) back
+// to pending status, undoing a prior Done or Delete. Taskwarrior clears the
+// task's "end" timestamp automatically when status is set back to pending.
+func (c *Client) Restore(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "status:pending")
+	return err
+}
+
+// Purge permanently removes the task identified by id (a Taskwarrior ID or
+// UUID) from Taskwarrior's data files. Unlike Delete, this cannot be undone
+// via Restore: Taskwarrior must already consider the task deleted before it
+// can be purged.
+func (c *Client) Purge(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "purge")
 	return err
 }
 

@@ -72,6 +72,32 @@
     logged as a new Phase 3 backlog item in requirements.md, not started.
   - 🔜 Chunk 4 (Shared filter state + Projects panel, key 3) is next,
     pending sign-off.
+- ✅ **Global vs. local keybinding architecture + Done/Deleted task
+  reopen/restore/purge — DONE.** Ad-hoc feature (direct instruction, not
+  from the Section 7 backlog), delivered as 3 signed-off chunks plus
+  follow-up refinements:
+  - Chunk 1: reworked `cmd/lazytask/main.go` key dispatch into a lazygit-
+    style global tier (quit, panel focus `0`-`4`, `Tab`/`Shift+Tab`) and a
+    Tasks-panel-local tier (nav, `[`/`]`, `a`/`d`/`x`/`e`, `r`); dropped
+    the old `r` = refresh binding (redundant now that mutations/tab
+    switches auto-refresh).
+  - Chunk 2: added `Restore` (`modify status:pending`) bound to `r` on
+    Done/Deleted tabs to move a task back to Todo; user-facing label
+    settled on "reopen" after discussion (internal `Restore`/
+    `TaskRestorer`/`restoreTask` naming kept as-is).
+  - Chunk 3: added `Purge` (`purge`) bound to `x` on the Deleted tab for
+    permanent deletion (soft-delete `x` unchanged elsewhere).
+  - Follow-up: fixed a bug where `d` errored on the Done tab (taskwarrior
+    rejects `done` on already-completed tasks) — `d` is now a no-op there
+    (hint hidden), and on the Deleted tab `d` restores-then-dones in one
+    step. Added confirmation popups (`y`/`enter` confirm, `n`/`esc`
+    cancel) for mark-done and reopen/restore actions, matching the
+    existing delete/purge confirm pattern.
+  - Follow-up: popup wording no longer references the numeric task ID on
+    Done/Deleted tabs (always `0` there, so meaningless) — only Todo-tab
+    prompts keep the ID.
+  - Follow-up: all confirm popups now accept `enter` as well as `y`;
+    `popup.ConfirmBox` hint text updated to mention both.
 
 ## Up Next
 

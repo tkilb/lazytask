@@ -137,6 +137,40 @@ begins, since scope/design may shift by the time we get there.
   refinement above: when the task list is taller than the panel's assigned
   height, it should scroll instead of overflowing unclipped (current
   behavior). Not yet scoped/chunked.
+- ~~**Global vs. local keybinding architecture + Done/Deleted task
+  reopen/restore/purge**~~ — **DONE.** Ad-hoc, direct-instruction feature
+  (not from the Section 7 backlog), delivered in 3 signed-off chunks plus
+  follow-up refinements:
+  1. Refactored key dispatch in `cmd/lazytask/main.go` into a lazygit-style
+     global tier (`q`/`ctrl+c`, `0`-`4`, `Tab`/`Shift+Tab` — fire from any
+     panel focus) and a Tasks-panel-local tier (nav, `[`/`]`, `a`/`d`/`x`/`e`,
+     `r`), replacing the old fully-global dispatch. Dropped the old `r` =
+     refresh binding (redundant since every mutation/tab-switch already
+     auto-refreshes).
+  2. Added `Restore` (`modify status:pending`) to reopen a Done or Deleted
+     task back to Todo, bound to `r` on the Done/Deleted tabs; user-facing
+     status-bar label is "reopen" (internal identifiers keep "restore"
+     naming to match the underlying taskwarrior operation).
+  3. Added `Purge` (`purge`) to permanently delete a task from the Deleted
+     tab, bound to `x` there (soft-delete `x` semantics unchanged on
+     Todo/Done).
+  4. Follow-up: fixed a bug where `d` (mark done) errored on the Done tab
+     (taskwarrior's `done` command rejects already-completed tasks); `d` is
+     now a no-op on the Done tab (hint hidden), and on the Deleted tab `d`
+     restores-then-dones the task in one action. Added confirmation popups
+     (`y`/`enter` to confirm, `n`/`esc` to cancel) for all four mutating
+     actions that weren't already confirmed: mark-done (Todo and Deleted
+     tabs) and reopen/restore (Done and Deleted tabs), matching the
+     existing delete/purge confirm pattern.
+  5. Follow-up: popup wording refined so Done/Deleted-tab prompts never
+     reference the numeric task ID (taskwarrior always reports `ID: 0` for
+     non-pending tasks, so it's meaningless there) — only Todo-tab prompts
+     keep the ID. Final wording: `Mark task %d %q as done?` (Todo),
+     `Mark %q as done?` (Deleted, via restore+done), `Reopen %q?` (Done),
+     `Restore %q as a todo?` (Deleted).
+  6. Follow-up: all four confirm popups (delete/purge/done/reopen) now
+     accept `enter` as well as `y` to confirm; `popup.ConfirmBox`'s hint
+     text updated to `"(y/enter) confirm   (n/esc) cancel"`.
 - **General panel layout** — UX discussed and scoped below into 6 chunks,
   based on a since-removed `layout.md` design note. This covers the general
   layout, the filter/search panel, and the project & tag side panels as a

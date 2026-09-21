@@ -121,7 +121,7 @@ var confirmColor = lipgloss.Color("214") // orange, same as Warning
 // composite it centered over an existing view, mirroring Box's
 // severity-styled popups but for blocking confirmation prompts.
 func ConfirmBox(text string, screenWidth int) string {
-	return renderBox("Confirm", confirmColor, "(y) confirm   (n/esc) cancel", text, screenWidth)
+	return renderBox("Confirm", confirmColor, "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
 }
 
 // renderBox is the shared layout used by Box and ConfirmBox: a bordered box

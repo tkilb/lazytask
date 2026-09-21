@@ -61,6 +61,20 @@ func TestClient_Delete_EmptyID(t *testing.T) {
 	assert.Contains(t, err.Error(), "must not be empty")
 }
 
+func TestClient_Restore_EmptyID(t *testing.T) {
+	c := NewClient()
+	err := c.Restore(context.Background(), "  ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestClient_Purge_EmptyID(t *testing.T) {
+	c := NewClient()
+	err := c.Purge(context.Background(), "  ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
 func TestClient_Import_EmptyData(t *testing.T) {
 	c := NewClient()
 	err := c.Import(context.Background(), []byte("   "))
@@ -135,6 +149,15 @@ func TestClient_Mutations_Integration(t *testing.T) {
 	require.Len(t, deleted, 1)
 	assert.Equal(t, "Write docs", deleted[0].Description)
 
+	// 3b. Restore the deleted task back to pending.
+	err = client.Restore(ctx, deleted[0].UUID)
+	require.NoError(t, err)
+
+	restoredPending, err := client.Export(ctx, "status:pending")
+	require.NoError(t, err)
+	require.Len(t, restoredPending, 1)
+	assert.Equal(t, "Write docs", restoredPending[0].Description)
+
 	// 4. Import edited fields back onto the completed task, simulating a
 	// round trip through an external editor.
 	completed[0].Description = "Buy groceries and milk"
@@ -151,4 +174,20 @@ func TestClient_Mutations_Integration(t *testing.T) {
 	assert.Equal(t, "Buy groceries and milk", reimported[0].Description)
 	assert.Equal(t, "Home", reimported[0].Project)
 	assert.Equal(t, completed[0].UUID, reimported[0].UUID)
+
+	// 5. Delete the restored task again, then purge it permanently and
+	// confirm it no longer shows up even in the deleted export.
+	err = client.Delete(ctx, restoredPending[0].UUID)
+	require.NoError(t, err)
+
+	rePurgedDeleted, err := client.Export(ctx, "status:deleted")
+	require.NoError(t, err)
+	require.Len(t, rePurgedDeleted, 1)
+
+	err = client.Purge(ctx, rePurgedDeleted[0].UUID)
+	require.NoError(t, err)
+
+	afterPurge, err := client.Export(ctx, "status:deleted")
+	require.NoError(t, err)
+	assert.Empty(t, afterPurge)
 }

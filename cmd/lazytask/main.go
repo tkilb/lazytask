@@ -106,22 +106,62 @@ const (
 	statusPanelHeight = 3
 )
 
-// Keybinding sets shown in the status bar for each panel/mode. Kept in one
-// place so the bar and the actual key handling in Update don't drift apart.
-var (
-	listBindings = []statusbar.Binding{
-		{Key: "↑/k", Label: "up"},
-		{Key: "↓/j", Label: "down"},
-		{Key: "0-4/tab", Label: "panels"},
-		{Key: "[/]", Label: "tabs"},
-		{Key: "a", Label: "add"},
-		{Key: "d", Label: "done"},
-		{Key: "x", Label: "delete"},
-		{Key: "e", Label: "edit"},
-		{Key: "r", Label: "refresh"},
-		{Key: "q", Label: "quit"},
+// globalBindings are active no matter which panel currently has focus,
+// mirroring lazygit's global-vs-local keybinding split: they only ever
+// affect panel focus/navigation and app lifecycle, never panel-specific
+// data (tasks, projects, tags, ...).
+var globalBindings = []statusbar.Binding{
+	{Key: "0-4/tab", Label: "panels"},
+	{Key: "q", Label: "quit"},
+}
+
+// tasksLocalBindings are only active while the Tasks panel has focus. They
+// are appended after globalBindings in the status bar so the hint line
+// reflects exactly which keys will do something right now. "r" and the
+// Deleted-tab-specific "x" (purge) label are only meaningful on certain
+// tabs, so they're added/overridden separately by statusBindings rather
+// than listed here.
+var tasksLocalBindings = []statusbar.Binding{
+	{Key: "↑/k", Label: "up"},
+	{Key: "↓/j", Label: "down"},
+	{Key: "[/]", Label: "tabs"},
+	{Key: "a", Label: "add"},
+	{Key: "d", Label: "done"},
+	{Key: "x", Label: "delete"},
+	{Key: "e", Label: "edit"},
+}
+
+// statusBindings returns the keybinding hints to show in the status bar for
+// the model's current focus: global bindings always apply, and Tasks-panel
+// bindings are appended only while that panel is focused (local bindings
+// per other panels are added here as those panels grow their own actions).
+// "d" is hidden on the Done tab since a task there is already done. "r" is
+// shown only on the Done/Deleted tabs (labeled "reopen" on Done, "restore"
+// on Deleted), and "x" is relabeled "purge" on the Deleted tab since it
+// becomes an irreversible permanent delete there, matching the actual key
+// handling in Update.
+func (m model) statusBindings() []statusbar.Binding {
+	bindings := make([]statusbar.Binding, 0, len(globalBindings)+len(tasksLocalBindings)+1)
+	bindings = append(bindings, globalBindings...)
+	if m.focus == focusTasks {
+		for _, b := range tasksLocalBindings {
+			if b.Key == "d" && m.list.Status() == tasklist.TabDone {
+				continue
+			}
+			if b.Key == "x" && m.list.Status() == tasklist.TabDeleted {
+				b.Label = "purge"
+			}
+			bindings = append(bindings, b)
+		}
+		switch m.list.Status() {
+		case tasklist.TabDone:
+			bindings = append(bindings, statusbar.Binding{Key: "r", Label: "reopen"})
+		case tasklist.TabDeleted:
+			bindings = append(bindings, statusbar.Binding{Key: "r", Label: "restore"})
+		}
 	}
-)
+	return bindings
+}
 
 // TaskReader is the subset of the taskwarrior client this model depends on,
 // so it can be stubbed out in tests without shelling out to the real `task`
@@ -149,6 +189,20 @@ type TaskDoner interface {
 // `task` binary.
 type TaskDeleter interface {
 	Delete(ctx context.Context, id string) error
+}
+
+// TaskRestorer is the subset of the taskwarrior client needed to restore a
+// Done or Deleted task back to pending, so it can be stubbed out in tests
+// without shelling out to the real `task` binary.
+type TaskRestorer interface {
+	Restore(ctx context.Context, id string) error
+}
+
+// TaskPurger is the subset of the taskwarrior client needed to permanently
+// remove an already-deleted task, so it can be stubbed out in tests without
+// shelling out to the real `task` binary.
+type TaskPurger interface {
+	Purge(ctx context.Context, id string) error
 }
 
 // TaskImporter is the subset of the taskwarrior client needed to re-import
@@ -196,6 +250,22 @@ type taskDeleteErrMsg struct {
 	err error
 }
 
+// taskRestoredMsg carries the result of a successful Restore call.
+type taskRestoredMsg struct{}
+
+// taskRestoreErrMsg carries the error from a failed Restore call.
+type taskRestoreErrMsg struct {
+	err error
+}
+
+// taskPurgedMsg carries the result of a successful Purge call.
+type taskPurgedMsg struct{}
+
+// taskPurgeErrMsg carries the error from a failed Purge call.
+type taskPurgeErrMsg struct {
+	err error
+}
+
 // taskEditedMsg carries the result of a successful edit-and-reimport.
 type taskEditedMsg struct{}
 
@@ -210,11 +280,16 @@ type model struct {
 	adder          TaskAdder
 	doner          TaskDoner
 	deleter        TaskDeleter
+	restorer       TaskRestorer
+	purger         TaskPurger
 	importer       TaskImporter
 	list           tasklist.Model
 	add            addform.Model
 	adding         bool
 	deleting       bool
+	purging        bool
+	completing     bool
+	restoring      bool
 	popups         popup.Model
 	quitting       bool
 	pendingFocusID int
@@ -230,6 +305,8 @@ func initialModel() model {
 		adder:    client,
 		doner:    client,
 		deleter:  client,
+		restorer: client,
+		purger:   client,
 		importer: client,
 		list:     tasklist.New(nil).SetFocused(true),
 		add:      addform.New(),
@@ -328,6 +405,23 @@ func doneTask(doner TaskDoner, id string) tea.Cmd {
 	}
 }
 
+// restoreThenDoneTask returns a tea.Cmd that restores the given task id
+// back to pending and then immediately marks it done. This is used to move
+// a Deleted task straight to Done, since Taskwarrior's `done` command
+// refuses to act on a task that isn't pending/waiting.
+func restoreThenDoneTask(restorer TaskRestorer, doner TaskDoner, id string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if err := restorer.Restore(ctx, id); err != nil {
+			return taskDoneErrMsg{err: err}
+		}
+		if err := doner.Done(ctx, id); err != nil {
+			return taskDoneErrMsg{err: err}
+		}
+		return taskDoneMsg{}
+	}
+}
+
 // deleteTask returns a tea.Cmd that deletes the given task id via deleter.
 func deleteTask(deleter TaskDeleter, id string) tea.Cmd {
 	return func() tea.Msg {
@@ -335,6 +429,28 @@ func deleteTask(deleter TaskDeleter, id string) tea.Cmd {
 			return taskDeleteErrMsg{err: err}
 		}
 		return taskDeletedMsg{}
+	}
+}
+
+// restoreTask returns a tea.Cmd that restores the given task id back to
+// pending status via restorer.
+func restoreTask(restorer TaskRestorer, id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := restorer.Restore(context.Background(), id); err != nil {
+			return taskRestoreErrMsg{err: err}
+		}
+		return taskRestoredMsg{}
+	}
+}
+
+// purgeTask returns a tea.Cmd that permanently removes the given task id
+// via purger. Unlike deleteTask, this is irreversible.
+func purgeTask(purger TaskPurger, id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := purger.Purge(context.Background(), id); err != nil {
+			return taskPurgeErrMsg{err: err}
+		}
+		return taskPurgedMsg{}
 	}
 }
 
@@ -412,6 +528,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.deleting {
 		return m.updateDeleting(msg)
 	}
+	if m.purging {
+		return m.updatePurging(msg)
+	}
+	if m.completing {
+		return m.updateCompleting(msg)
+	}
+	if m.restoring {
+		return m.updateRestoring(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -422,6 +547,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list, cmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: tasksHeight})
 		return m, cmd
 	case tea.KeyMsg:
+		// Global bindings apply no matter which panel has focus: they only
+		// ever touch app lifecycle or panel focus itself, never
+		// panel-specific data.
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
@@ -435,8 +563,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			m = m.setFocus(prevFocus(m.focus))
 			return m, nil
-		case "r":
-			return m, fetchTasks(m.reader, m.list.StatusFilter())
+		}
+		// Everything else is local to the Tasks panel and only fires while
+		// it has focus (lazygit-style global/local keybinding split).
+		if m.focus != focusTasks {
+			return m, nil
+		}
+		switch msg.String() {
 		case "[":
 			m.list = m.list.PrevStatus()
 			return m, fetchTasks(m.reader, m.list.StatusFilter())
@@ -448,13 +581,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.add = m.add.Focus()
 			return m, m.add.Init()
 		case "d":
-			if task, ok := m.list.Selected(); ok {
-				return m, doneTask(m.doner, taskID(task))
+			// A Done task is already done; there's nothing to confirm.
+			if m.list.Status() == tasklist.TabDone {
+				return m, nil
+			}
+			if _, ok := m.list.Selected(); ok {
+				m.completing = true
+			}
+			return m, nil
+		case "r":
+			// Only Done/Deleted tasks have anything to restore; Todo tasks
+			// are already pending.
+			if m.list.Status() == tasklist.TabTodo {
+				return m, nil
+			}
+			if _, ok := m.list.Selected(); ok {
+				m.restoring = true
 			}
 			return m, nil
 		case "x":
 			if _, ok := m.list.Selected(); ok {
-				m.deleting = true
+				if m.list.Status() == tasklist.TabDeleted {
+					m.purging = true
+				} else {
+					m.deleting = true
+				}
 			}
 			return m, nil
 		case "e":
@@ -488,6 +639,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskDeletedMsg:
 		return m, fetchTasks(m.reader, m.list.StatusFilter())
 	case taskDeleteErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskRestoredMsg:
+		return m, fetchTasks(m.reader, m.list.StatusFilter())
+	case taskRestoreErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskPurgedMsg:
+		return m, fetchTasks(m.reader, m.list.StatusFilter())
+	case taskPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
@@ -527,7 +688,7 @@ func (m model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "y":
+		case "y", "enter":
 			m.deleting = false
 			task, ok := m.list.Selected()
 			if !ok {
@@ -536,6 +697,76 @@ func (m model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, deleteTask(m.deleter, taskID(task))
 		case "n", "esc":
 			m.deleting = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// updatePurging handles messages while a permanent-delete (purge)
+// confirmation is pending. This is a distinct flow from updateDeleting
+// because purging is irreversible and only ever offered on the Deleted
+// tab, whereas "x" on Todo/Done still means the reversible soft-delete.
+func (m model) updatePurging(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "enter":
+			m.purging = false
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			return m, purgeTask(m.purger, taskID(task))
+		case "n", "esc":
+			m.purging = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// updateCompleting handles messages while a done confirmation is pending.
+// On the Deleted tab, confirming restores the task to pending first (since
+// Taskwarrior's `done` refuses non-pending tasks) and then marks it done,
+// moving it straight from Deleted to Done.
+func (m model) updateCompleting(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "enter":
+			m.completing = false
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			if m.list.Status() == tasklist.TabDeleted {
+				return m, restoreThenDoneTask(m.restorer, m.doner, taskID(task))
+			}
+			return m, doneTask(m.doner, taskID(task))
+		case "n", "esc":
+			m.completing = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// updateRestoring handles messages while a restore/reopen confirmation is
+// pending.
+func (m model) updateRestoring(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "enter":
+			m.restoring = false
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			return m, restoreTask(m.restorer, taskID(task))
+		case "n", "esc":
+			m.restoring = false
 			return m, nil
 		}
 	}
@@ -590,7 +821,7 @@ func (m model) screenDims() (width, height int) {
 // of being replaced by a blank screen.
 func (m model) baseView() string {
 	view := m.renderGrid()
-	view += "\n" + statusbar.Render(listBindings) + "\n"
+	view += "\n" + statusbar.Render(m.statusBindings()) + "\n"
 	return view
 }
 
@@ -608,7 +839,43 @@ func (m model) View() string {
 
 	if m.deleting {
 		if task, ok := m.list.Selected(); ok {
-			text := fmt.Sprintf("Delete task %d %q?", task.ID, task.Description)
+			var text string
+			if m.list.Status() == tasklist.TabTodo {
+				text = fmt.Sprintf("Delete task %d %q?", task.ID, task.Description)
+			} else {
+				text = fmt.Sprintf("Delete %q?", task.Description)
+			}
+			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
+		}
+	}
+
+	if m.purging {
+		if task, ok := m.list.Selected(); ok {
+			text := fmt.Sprintf("Permanently delete %q? This cannot be undone.", task.Description)
+			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
+		}
+	}
+
+	if m.completing {
+		if task, ok := m.list.Selected(); ok {
+			var text string
+			if m.list.Status() == tasklist.TabTodo {
+				text = fmt.Sprintf("Mark task %d %q as done?", task.ID, task.Description)
+			} else {
+				text = fmt.Sprintf("Mark %q as done?", task.Description)
+			}
+			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
+		}
+	}
+
+	if m.restoring {
+		if task, ok := m.list.Selected(); ok {
+			var text string
+			if m.list.Status() == tasklist.TabDone {
+				text = fmt.Sprintf("Reopen %q?", task.Description)
+			} else {
+				text = fmt.Sprintf("Restore %q as a todo?", task.Description)
+			}
 			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
 		}
 	}
