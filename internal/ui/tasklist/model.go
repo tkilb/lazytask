@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tkilb/lazytask/internal/taskwarrior"
+	"github.com/tkilb/lazytask/internal/ui/panel"
 )
 
 const (
@@ -21,14 +22,6 @@ const (
 )
 
 var (
-	borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("62"))
-
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("62"))
-
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("245"))
@@ -40,10 +33,11 @@ var (
 // Model is a Bubble Tea model rendering a bordered, selectable list of
 // taskwarrior tasks.
 type Model struct {
-	tasks  []taskwarrior.Task
-	cursor int
-	width  int
-	height int
+	tasks   []taskwarrior.Task
+	cursor  int
+	width   int
+	height  int
+	focused bool
 }
 
 // New constructs a Model over the given tasks. The list starts with the
@@ -87,6 +81,14 @@ func (m Model) SelectID(id int) Model {
 	return m
 }
 
+// SetFocused records whether the Tasks panel currently has focus in the
+// surrounding panel grid, so View can apply the shared focused-panel border
+// highlight (see internal/ui/panel).
+func (m Model) SetFocused(focused bool) Model {
+	m.focused = focused
+	return m
+}
+
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	return nil
@@ -120,15 +122,13 @@ func (m Model) View() string {
 	if width <= 0 {
 		width = minPanelWidth
 	}
-	// Account for border + padding consumed by borderStyle.
-	innerWidth := width - 4
+	// Account for the left/right border columns (see panel.InnerSize).
+	innerWidth := width - 2
 	if innerWidth < 20 {
 		innerWidth = 20
 	}
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Tasks"))
-	b.WriteString("\n")
 	b.WriteString(headerStyle.Render(formatRow(innerWidth, "ID", "Description", "Project", "Priority", "Due")))
 	b.WriteString("\n")
 
@@ -153,7 +153,9 @@ func (m Model) View() string {
 		}
 	}
 
-	return borderStyle.Width(innerWidth).Render(b.String())
+	body := b.String()
+	height := strings.Count(body, "\n") + 1
+	return panel.Frame("2 Tasks", body, innerWidth, height, m.focused)
 }
 
 // formatRow lays out the fixed-width columns used by both the header and

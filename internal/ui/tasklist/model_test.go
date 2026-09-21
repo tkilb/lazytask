@@ -171,3 +171,14 @@ func TestModel_View_Empty(t *testing.T) {
 
 	assert.True(t, strings.Contains(view, "(no tasks)"))
 }
+
+func TestModel_SetFocused_SetsFocusedFlag(t *testing.T) {
+	m := New(sampleTasks())
+	assert.False(t, m.focused)
+
+	m = m.SetFocused(true)
+	assert.True(t, m.focused)
+
+	m = m.SetFocused(false)
+	assert.False(t, m.focused)
+}

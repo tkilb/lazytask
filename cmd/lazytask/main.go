@@ -8,13 +8,95 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tkilb/lazytask/internal/editbuffer"
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
+	"github.com/tkilb/lazytask/internal/ui/panel"
 	"github.com/tkilb/lazytask/internal/ui/statusbar"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
+)
+
+// panelFocus identifies which panel in the grid currently has keyboard
+// focus. focusTasks is the zero value so a model constructed without going
+// through initialModel (as most tests do) keeps the pre-grid behavior of
+// routing navigation keys straight to the Tasks list.
+type panelFocus int
+
+const (
+	focusTasks panelFocus = iota
+	focusStatus
+	focusProjects
+	focusTags
+	focusDetails
+)
+
+// panelKeyBindings maps the number keys shown in the panel titles to the
+// panel they focus.
+var panelKeyBindings = map[string]panelFocus{
+	"0": focusDetails,
+	"1": focusStatus,
+	"2": focusTasks,
+	"3": focusProjects,
+	"4": focusTags,
+}
+
+// focusCycle is the Tab/Shift+Tab traversal order: top-to-bottom through
+// the left column, then the right column's single large panel.
+var focusCycle = []panelFocus{focusStatus, focusTasks, focusProjects, focusTags, focusDetails}
+
+// panelTitle returns the display title for a given panel, including its
+// number-key hint (lazygit-style).
+func panelTitle(f panelFocus) string {
+	switch f {
+	case focusStatus:
+		return "1 Status"
+	case focusProjects:
+		return "3 Projects"
+	case focusTags:
+		return "4 Tags"
+	case focusDetails:
+		return "0 Details"
+	default:
+		return ""
+	}
+}
+
+func nextFocus(f panelFocus) panelFocus {
+	for i, c := range focusCycle {
+		if c == f {
+			return focusCycle[(i+1)%len(focusCycle)]
+		}
+	}
+	return focusCycle[0]
+}
+
+func prevFocus(f panelFocus) panelFocus {
+	for i, c := range focusCycle {
+		if c == f {
+			return focusCycle[(i-1+len(focusCycle))%len(focusCycle)]
+		}
+	}
+	return focusCycle[0]
+}
+
+const (
+	// defaultGridWidth/defaultGridHeight size the panel grid before the
+	// first tea.WindowSizeMsg arrives (e.g. in tests that call View()
+	// directly without going through a real terminal).
+	defaultGridWidth  = 100
+	defaultGridHeight = 30
+
+	// gridBottomOverhead is the number of terminal rows View() renders
+	// below the grid (a blank line plus the status bar's single line of
+	// key hints). It must be subtracted from the real terminal height
+	// before sizing the grid, otherwise the grid plus this trailing
+	// content overflows the terminal and the top of the grid (the Status
+	// and Details panels' top borders, both on the grid's first row)
+	// scrolls off-screen.
+	gridBottomOverhead = 2
 )
 
 // Keybinding sets shown in the status bar for each panel/mode. Kept in one
@@ -23,6 +105,7 @@ var (
 	listBindings = []statusbar.Binding{
 		{Key: "↑/k", Label: "up"},
 		{Key: "↓/j", Label: "down"},
+		{Key: "0-4/tab", Label: "panels"},
 		{Key: "a", Label: "add"},
 		{Key: "d", Label: "done"},
 		{Key: "x", Label: "delete"},
@@ -137,6 +220,9 @@ type model struct {
 	err            error
 	quitting       bool
 	pendingFocusID int
+	focus          panelFocus
+	width          int
+	height         int
 }
 
 func initialModel() model {
@@ -147,9 +233,39 @@ func initialModel() model {
 		doner:    client,
 		deleter:  client,
 		importer: client,
-		list:     tasklist.New(nil),
+		list:     tasklist.New(nil).SetFocused(true),
 		add:      addform.New(),
 	}
+}
+
+// setFocus updates which panel has focus, keeping the Tasks list's own
+// focused flag (used for its border highlight) in sync.
+func (m model) setFocus(f panelFocus) model {
+	m.focus = f
+	m.list = m.list.SetFocused(f == focusTasks)
+	return m
+}
+
+// gridDims computes the panel grid's column widths and left-column row
+// height from the model's last known terminal size, falling back to sane
+// defaults if no tea.WindowSizeMsg has been received yet (e.g. in tests
+// that call View directly).
+func (m model) gridDims() (leftWidth, rightWidth, rowHeight, fullHeight int) {
+	width := m.width
+	if width <= 0 {
+		width = defaultGridWidth
+	}
+	height := m.height
+	if height <= 0 {
+		height = defaultGridHeight
+	} else if height > gridBottomOverhead {
+		height -= gridBottomOverhead
+	}
+	leftWidth = width / 2
+	rightWidth = width - leftWidth
+	rowHeight = height / 4
+	fullHeight = height
+	return leftWidth, rightWidth, rowHeight, fullHeight
 }
 
 // fetchTasks returns a tea.Cmd that loads pending tasks via reader.
@@ -260,11 +376,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		leftWidth, _, rowHeight, _ := m.gridDims()
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: rowHeight})
+		return m, cmd
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "0", "1", "2", "3", "4":
+			m = m.setFocus(panelKeyBindings[msg.String()])
+			return m, nil
+		case "tab":
+			m = m.setFocus(nextFocus(m.focus))
+			return m, nil
+		case "shift+tab":
+			m = m.setFocus(prevFocus(m.focus))
+			return m, nil
 		case "r":
 			return m, fetchTasks(m.reader)
 		case "a":
@@ -330,9 +462,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	// Remaining messages (e.g. up/down/j/k navigation) only apply to the
+	// Tasks panel, and only reach it while it has focus.
+	if m.focus == focusTasks {
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 // taskID returns the identifier used to address t in taskwarrior mutation
@@ -401,7 +538,7 @@ func (m model) View() string {
 		return view
 	}
 
-	view := m.list.View()
+	view := m.renderGrid()
 	if m.deleting {
 		if task, ok := m.list.Selected(); ok {
 			view += fmt.Sprintf("\nDelete task %d %q? (y/n)\n", task.ID, task.Description)
@@ -414,6 +551,25 @@ func (m model) View() string {
 	}
 	view += "\n" + statusbar.Render(listBindings) + "\n"
 	return view
+}
+
+// renderGrid lays out the lazygit-style panel grid: a left column of 4
+// stacked panels (Status, Tasks, Projects, Tags) and one large panel
+// (Details) filling the right column. Only the Tasks panel (slot 2) has
+// real content so far; the rest are placeholders until later chunks.
+func (m model) renderGrid() string {
+	leftWidth, rightWidth, rowHeight, fullHeight := m.gridDims()
+
+	status := panel.Render(panelTitle(focusStatus), "(coming soon)", leftWidth, rowHeight, m.focus == focusStatus)
+	tasksPanel := m.list.View()
+	projects := panel.Render(panelTitle(focusProjects), "(coming soon)", leftWidth, rowHeight, m.focus == focusProjects)
+	tags := panel.Render(panelTitle(focusTags), "(coming soon)", leftWidth, rowHeight, m.focus == focusTags)
+
+	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, projects, tags)
+
+	details := panel.Render(panelTitle(focusDetails), "(coming soon)", rightWidth, fullHeight, m.focus == focusDetails)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, details)
 }
 
 func main() {

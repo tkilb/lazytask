@@ -130,15 +130,20 @@ begins, since scope/design may shift by the time we get there.
   per Section 5; only Chunk 1 is approved to start — the rest need a
   checkpoint after the prior chunk lands, per usual.
 
-  1. **Panel grid scaffold + focus navigation** — two-column 50/50 grid
-     computed from `tea.WindowSizeMsg`; left column split into 4 stacked
-     rows (Status, Tasks, Projects, Tags); right column holds one large
-     panel (Details, key `0`). Focus switches via number keys `0`-`4` and
-     via `Tab`/`Shift+Tab` cycling, with lazygit-style border-color
+  1. ~~**Panel grid scaffold + focus navigation**~~ — **DONE.** Two-column
+     50/50 grid computed from `tea.WindowSizeMsg`; left column split into 4
+     stacked rows (Status, Tasks, Projects, Tags); right column holds one
+     large panel (Details, key `0`). Focus switches via number keys `0`-`4`
+     and via `Tab`/`Shift+Tab` cycling, with lazygit-style border-color
      highlight on the focused panel. Existing `tasklist` slots into panel
-     `2`; panels `1`/`3`/`4`/`0` are empty placeholders for now. Establishes
-     the shared "focused panel" style helper later chunks reuse. **Approved
-     to start.**
+     `2`; panels `1`/`3`/`4`/`0` are empty placeholders for now. Shared
+     "focused panel" styling lives in `internal/ui/panel`
+     (`panel.Render`/`panel.Frame`) for later chunks to reuse. Follow-up
+     visual refinement folded into this chunk: panel titles are embedded
+     inline in the top border (lazygit-style, e.g. `╭──[1]-Status────╮`)
+     instead of a separate content row, reclaiming a row of body height in
+     every panel, and the Tasks panel shows its `[2]-Tasks` number-key hint
+     like the other four.
   2. **Status panel (key 1)** — shows the ID, status, and project of
      whatever task is currently selected in Tasks; updates live as the
      Tasks cursor moves.

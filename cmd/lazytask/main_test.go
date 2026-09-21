@@ -580,6 +580,92 @@ func TestEditTaskCallback_MalformedBufferSkipsImport(t *testing.T) {
 	assert.Empty(t, importer.calls)
 }
 
+func TestModelUpdate_NumberKeysChangeFocus(t *testing.T) {
+	tests := []struct {
+		key       string
+		wantFocus panelFocus
+	}{
+		{key: "1", wantFocus: focusStatus},
+		{key: "2", wantFocus: focusTasks},
+		{key: "3", wantFocus: focusProjects},
+		{key: "4", wantFocus: focusTags},
+		{key: "0", wantFocus: focusDetails},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			m := model{list: tasklist.New(nil)}
+			newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.key)})
+			m = newModel.(model)
+			assert.Equal(t, tt.wantFocus, m.focus)
+			assert.Nil(t, cmd)
+		})
+	}
+}
+
+func TestModelUpdate_TabCyclesFocusForward(t *testing.T) {
+	m := model{list: tasklist.New(nil)} // starts at focusTasks (index 1 in focusCycle)
+	wantOrder := []panelFocus{focusProjects, focusTags, focusDetails, focusStatus, focusTasks}
+
+	for _, want := range wantOrder {
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = newModel.(model)
+		assert.Equal(t, want, m.focus)
+	}
+}
+
+func TestModelUpdate_ShiftTabCyclesFocusBackward(t *testing.T) {
+	m := model{list: tasklist.New(nil)} // starts at focusTasks (index 1 in focusCycle)
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = newModel.(model)
+	assert.Equal(t, focusStatus, m.focus)
+}
+
+func TestModelUpdate_NavigationOnlyReachesListWhenTasksFocused(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "Buy milk"},
+		{ID: 2, Description: "Water plants"},
+	}
+
+	t.Run("forwarded when Tasks panel focused", func(t *testing.T) {
+		m := model{list: tasklist.New(tasks), focus: focusTasks}
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(model)
+		selected, ok := m.list.Selected()
+		require.True(t, ok)
+		assert.Equal(t, 2, selected.ID)
+	})
+
+	t.Run("not forwarded when another panel focused", func(t *testing.T) {
+		m := model{list: tasklist.New(tasks), focus: focusStatus}
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(model)
+		selected, ok := m.list.Selected()
+		require.True(t, ok)
+		assert.Equal(t, 1, selected.ID)
+	})
+}
+
+func TestModelUpdate_WindowSizeMsgResizesListPanel(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = newModel.(model)
+	assert.Equal(t, 120, m.width)
+	assert.Equal(t, 40, m.height)
+	assert.Nil(t, cmd)
+}
+
+func TestModelView_RendersGridWithAllPanelTitles(t *testing.T) {
+	m := model{list: tasklist.New(nil), add: addform.New()}
+	view := m.View()
+
+	for _, want := range []string{"[2]-Tasks", "[1]-Status", "[3]-Projects", "[4]-Tags", "[0]-Details"} {
+		assert.Contains(t, view, want)
+	}
+}
+
 func TestEditTaskCallback_ImportErrSetsErrMsg(t *testing.T) {
 	original := taskwarrior.Task{UUID: "abc-123"}
 	_, session, err := editor.Prepare(editbuffer.Serialize(original))
