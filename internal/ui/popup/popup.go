@@ -124,6 +124,16 @@ func ConfirmBox(text string, screenWidth int) string {
 	return renderBox("Confirm", confirmColor, "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
 }
 
+// DangerConfirmBox draws a yes/no confirmation modal box like ConfirmBox,
+// but styled with the same red used by Error popups: for confirmations
+// whose consequences are especially destructive or hard to undo (e.g.
+// renaming a project onto an existing one, silently merging their tasks
+// together), so the elevated risk is visually obvious rather than looking
+// like a routine confirmation.
+func DangerConfirmBox(text string, screenWidth int) string {
+	return renderBox("Confirm", Error.color(), "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
+}
+
 // renderBox is the shared layout used by Box and ConfirmBox: a bordered box
 // with a colored title, body text, and a hint line at the bottom.
 func renderBox(titleText string, color lipgloss.Color, hintText, bodyText string, screenWidth int) string {

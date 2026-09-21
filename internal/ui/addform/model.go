@@ -43,15 +43,26 @@ const hintText = "Press <enter> to add, <esc> to cancel"
 type Model struct {
 	input textinput.Model
 	width int
+	title string
+	hint  string
 }
 
-// New constructs a Model with an empty input.
+// New constructs a Model with an empty input, titled "Add Task" for
+// prompting a new task description.
 func New() Model {
+	return NewNamed("Add Task", hintText, "Task description...")
+}
+
+// NewNamed constructs a Model with an empty input, using title/hint/
+// placeholder in place of the "Add Task" defaults, so this same
+// bordered-input-box component can be reused for other single-line
+// prompts (e.g. renaming a project).
+func NewNamed(title, hint, placeholder string) Model {
 	ti := textinput.New()
 	ti.Prompt = ""
-	ti.Placeholder = "Task description..."
+	ti.Placeholder = placeholder
 	ti.CharLimit = 256
-	return Model{input: ti}
+	return Model{input: ti, title: title, hint: hint}
 }
 
 // Focus gives the input keyboard focus and clears any prior text.
@@ -75,6 +86,14 @@ func (m Model) Focused() bool {
 // Value returns the current (untrimmed) input text.
 func (m Model) Value() string {
 	return m.input.Value()
+}
+
+// SetValue replaces the input text (e.g. pre-filling it with an existing
+// name to edit), moving the cursor to the end.
+func (m Model) SetValue(s string) Model {
+	m.input.SetValue(s)
+	m.input.CursorEnd()
+	return m
 }
 
 // Reset clears the input text.
@@ -115,17 +134,17 @@ func (m Model) View() string {
 	}
 
 	body := bodyStyle.Width(innerWidth).Render(m.input.View())
-	return topBorder(innerWidth) + "\n" + body
+	return m.topBorder(innerWidth) + "\n" + body
 }
 
-// topBorder builds the box's top edge with the "Add Task" title embedded on
-// the left and the key-binding hint embedded on the right, lazygit-style,
-// e.g. "╭─ Add Task ─────── Press <enter> to add, <esc> to cancel ─╮".
-func topBorder(innerWidth int) string {
+// topBorder builds the box's top edge with the title embedded on the left
+// and the key-binding hint embedded on the right, lazygit-style, e.g.
+// "╭─ Add Task ─────── Press <enter> to add, <esc> to cancel ─╮".
+func (m Model) topBorder(innerWidth int) string {
 	border := lipgloss.RoundedBorder()
 
-	title := " " + titleStyle.Render("Add Task") + " "
-	hint := " " + hintStyle.Render(hintText) + " "
+	title := " " + titleStyle.Render(m.title) + " "
+	hint := " " + hintStyle.Render(m.hint) + " "
 
 	// totalWidth is the full rendered width, including the two corner
 	// runes, matching bodyStyle.Width(innerWidth)'s rendered width.

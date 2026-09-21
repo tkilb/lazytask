@@ -5,6 +5,7 @@
 package projects
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,10 +38,27 @@ var selectedRowStyle = lipgloss.NewStyle().Reverse(true)
 // names to SetProjects.
 type Model struct {
 	projects []string
+	counts   Counts
 	cursor   int
 	width    int
 	height   int
 	focused  bool
+}
+
+// Counts carries the number of tasks behind each selectable entry, so the
+// panel can render an "[N]" suffix next to each project name (and the
+// AllLabel/NoneLabel special entries). It is expected to be sourced from
+// the same task set used to derive the distinct project names, so the
+// counts stay consistent with what's actually selectable/filterable here.
+type Counts struct {
+	// All is the total task count across every project (what AllLabel
+	// represents).
+	All int
+	// None is the count of tasks with no project set (what NoneLabel
+	// represents).
+	None int
+	// ByProject maps a project name to its task count.
+	ByProject map[string]int
 }
 
 // New constructs an empty Model.
@@ -64,6 +82,14 @@ func (m Model) SetProjects(projectNames []string) Model {
 	return m
 }
 
+// SetCounts replaces the per-entry task counts shown as an "[N]" suffix
+// next to each entry in View. It does not affect Selected/navigation,
+// which continue to operate on the raw entry names.
+func (m Model) SetCounts(counts Counts) Model {
+	m.counts = counts
+	return m
+}
+
 // entries returns the full selectable list: the AllLabel/NoneLabel special
 // entries pinned to the top, followed by the real project names.
 func (m Model) entries() []string {
@@ -71,6 +97,14 @@ func (m Model) entries() []string {
 	entries = append(entries, AllLabel, NoneLabel)
 	entries = append(entries, m.projects...)
 	return entries
+}
+
+// Projects returns the current distinct project names (as passed to the
+// last SetProjects call), excluding the AllLabel/NoneLabel special entries.
+// Callers use this to check a candidate name against the existing set
+// (e.g. detecting a rename that would merge into another project).
+func (m Model) Projects() []string {
+	return append([]string(nil), m.projects...)
 }
 
 // Selected returns the entry currently under the cursor (a project name, or
@@ -133,7 +167,7 @@ func (m Model) View() string {
 	entries := m.entries()
 	lines := make([]string, len(entries))
 	for i, e := range entries {
-		line := truncate(e, innerWidth)
+		line := m.displayLine(e, innerWidth)
 		if i == m.cursor {
 			line = selectedRowStyle.Render(line)
 		}
@@ -142,6 +176,56 @@ func (m Model) View() string {
 	body := strings.Join(lines, "\n")
 
 	return panel.Frame("3 Projects", body, innerWidth, innerHeight, m.focused)
+}
+
+// countFieldWidth is the fixed width reserved for the "(N)" count field
+// (right-aligned within it), so every row's count lines up in the same
+// column regardless of name length or digit count — e.g. "(4)" and
+// "(1234)" both occupy the same field width, padded with leading spaces.
+const countFieldWidth = 6 // fits up to "(9999)"
+
+// displayLine renders entry's full row: its name, then a fixed-width
+// "(N)" task-count field right-aligned flush against the panel's right
+// edge, so counts form a straight column down the panel.
+func (m Model) displayLine(entry string, width int) string {
+	field := countField(m.count(entry))
+	if width <= 0 {
+		return entry + " " + field
+	}
+	// Reserve a space between name and count field; truncate the name if
+	// the combination doesn't fit the available width.
+	nameWidth := width - countFieldWidth - 1
+	if nameWidth < 0 {
+		nameWidth = 0
+	}
+	name := truncate(entry, nameWidth)
+	pad := width - len([]rune(name)) - countFieldWidth
+	if pad < 1 {
+		pad = 1
+	}
+	return name + strings.Repeat(" ", pad) + field
+}
+
+// countField renders n as "(n)", right-aligned/padded to countFieldWidth.
+func countField(n int) string {
+	s := fmt.Sprintf("(%d)", n)
+	if pad := countFieldWidth - len([]rune(s)); pad > 0 {
+		s = strings.Repeat(" ", pad) + s
+	}
+	return s
+}
+
+// count returns the task count backing entry (AllLabel/NoneLabel/a project
+// name), sourced from m.counts.
+func (m Model) count(entry string) int {
+	switch entry {
+	case AllLabel:
+		return m.counts.All
+	case NoneLabel:
+		return m.counts.None
+	default:
+		return m.counts.ByProject[entry]
+	}
 }
 
 // truncate shortens s to fit within width, adding an ellipsis if it was cut.

@@ -171,6 +171,42 @@ begins, since scope/design may shift by the time we get there.
   6. Follow-up: all four confirm popups (delete/purge/done/reopen) now
      accept `enter` as well as `y` to confirm; `popup.ConfirmBox`'s hint
      text updated to `"(y/enter) confirm   (n/esc) cancel"`.
+- ~~**Project rename + Projects-panel task counts**~~ — **DONE.** Ad-hoc,
+  direct-instruction feature (not from the Section 7 backlog), delivered in
+  2 signed-off chunks:
+  1. Projects panel entries now show a fixed-width `(N)` task-count suffix
+     (right-aligned so all counts line up), counting only pending
+     ("todo lane") tasks. `(all)` shows the total pending count across all
+     projects; `(none)` shows the pending count of tasks with no project.
+  2. `Shift+R` on a real project entry (not `(all)`/`(none)`) opens a
+     rename text-input box (reusing/generalizing the `addform` bordered-box
+     component via a new `NewNamed`/`SetValue` API), pre-filled with the
+     current project name and auto-trimming leading/trailing whitespace on
+     submit. Confirming renames the project on **every** task regardless of
+     status (pending/completed/deleted), via the existing `Export`/`Import`
+     round-trip filtered to exact project-name matches in Go (not a
+     taskwarrior CLI filter, to avoid prefix-matching subprojects). A
+     normal orange `ConfirmBox` confirms the rename; if the trimmed target
+     name matches an *existing different* project, a second, red
+     `DangerConfirmBox` (new `popup.DangerConfirmBox`) warns that this will
+     merge tasks into that project and may be hard to undo. The active
+     project filter follows the rename if it was pointed at the renamed
+     project.
+  3. Follow-up fix (direct instruction, same feature): projects with zero
+     pending tasks were vanishing from the panel entirely (deleting a
+     project's last task) or lingering forever after a restart (a project
+     with only completed tasks) because `fetchProjects` re-derived the
+     entire list from scratch on every refresh. It now queries
+     `status:pending` only, and `model` keeps a session-lifetime
+     `knownProjects` set that's unioned with each fetch — a project stays
+     visible (showing `(0)`) once seen this session, even after its last
+     pending task is completed/deleted, but a project with no pending
+     tasks left simply won't reappear after an app restart. Also fixed a
+     separate, longer-standing bug where marking a task done, deleting,
+     restoring, or purging only refreshed the Tasks list, never the
+     Projects panel — so counts went stale after any of those actions
+     (most visibly as a `(0)`-count project still showing `(1)`). All four
+     now refresh both the Tasks list and Projects panel.
 - **General panel layout** — UX discussed and scoped below into 6 chunks,
   based on a since-removed `layout.md` design note. This covers the general
   layout, the filter/search panel, and the project & tag side panels as a

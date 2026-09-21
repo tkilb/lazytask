@@ -135,10 +135,14 @@ var tasksLocalBindings = []statusbar.Binding{
 
 // projectsLocalBindings are only active while the Projects panel has
 // focus: navigating the list automatically updates the shared project
-// filter.
+// filter, and "R" opens the rename-project prompt on the entry under the
+// cursor (only meaningful on a real project, not the (all)/(none) special
+// entries, but shown unconditionally here for simplicity, matching how
+// other bindings lists don't special-case every possible selection).
 var projectsLocalBindings = []statusbar.Binding{
 	{Key: "↑/k", Label: "up"},
 	{Key: "↓/j", Label: "down"},
+	{Key: "R", Label: "rename"},
 }
 
 // statusBindings returns the keybinding hints to show in the status bar for
@@ -241,6 +245,7 @@ type tasksErrMsg struct {
 // has applied.
 type projectsLoadedMsg struct {
 	projects []string
+	counts   projects.Counts
 }
 
 // projectsErrMsg carries the error from a failed projects fetch.
@@ -301,6 +306,18 @@ type taskEditErrMsg struct {
 	err error
 }
 
+// projectRenamedMsg carries the result of a successful project rename,
+// including the new name so the active project filter (if it pointed at
+// the old name) can be updated to follow it.
+type projectRenamedMsg struct {
+	to string
+}
+
+// projectRenameErrMsg carries the error from a failed project rename.
+type projectRenameErrMsg struct {
+	err error
+}
+
 type model struct {
 	reader         TaskReader
 	adder          TaskAdder
@@ -316,6 +333,12 @@ type model struct {
 	purging        bool
 	completing     bool
 	restoring      bool
+	renaming       bool
+	renameInput    addform.Model
+	renameFrom     string
+	renameTo       string
+	renameMerging  bool
+	renameConfirm  bool
 	popups         popup.Model
 	quitting       bool
 	pendingFocusID int
@@ -324,21 +347,23 @@ type model struct {
 	height         int
 	projects       projects.Model
 	filter         filterState
+	knownProjects  map[string]struct{}
 }
 
 func initialModel() model {
 	client := taskwarrior.NewClient()
 	return model{
-		reader:   client,
-		adder:    client,
-		doner:    client,
-		deleter:  client,
-		restorer: client,
-		purger:   client,
-		importer: client,
-		list:     tasklist.New(nil).SetFocused(true),
-		add:      addform.New(),
-		projects: projects.New(),
+		reader:        client,
+		adder:         client,
+		doner:         client,
+		deleter:       client,
+		restorer:      client,
+		purger:        client,
+		importer:      client,
+		list:          tasklist.New(nil).SetFocused(true),
+		add:           addform.New(),
+		projects:      projects.New(),
+		knownProjects: make(map[string]struct{}),
 	}
 }
 
@@ -428,18 +453,66 @@ func (m model) taskFilters() []string {
 }
 
 // fetchProjects returns a tea.Cmd that loads the distinct project names
-// across all pending and completed tasks (deliberately excluding deleted
-// tasks). This deliberately ignores whatever status tab or project filter
-// the Tasks panel currently has applied: otherwise applying a project
-// filter would shrink the very list used to change/clear that filter.
+// across pending tasks only. This deliberately ignores whatever status tab
+// or project filter the Tasks panel currently has applied: otherwise
+// applying a project filter would shrink the very list used to change/clear
+// that filter. Projects that have gone to zero pending tasks (all done or
+// deleted) are handled by the caller merging this result into the
+// session's previously-seen project set, rather than by including
+// completed/deleted tasks here — that way a project a user never actually
+// worked with this session (all tasks already done before launch) doesn't
+// reappear just because it's still in taskwarrior's history.
 func fetchProjects(reader TaskReader) tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := reader.Export(context.Background(), "status:pending", "or", "status:completed")
+		tasks, err := reader.Export(context.Background(), "status:pending")
 		if err != nil {
 			return projectsErrMsg{err: err}
 		}
-		return projectsLoadedMsg{projects: distinctProjects(tasks)}
+		return projectsLoadedMsg{projects: distinctProjects(tasks), counts: projectCounts(tasks)}
 	}
+}
+
+// projectCounts tallies pending ("todo") task counts per project, plus
+// totals for the AllLabel (every pending task) and NoneLabel (no project
+// set) special entries, so the Projects panel can render a "(N)" field next
+// to each entry.
+func projectCounts(tasks []taskwarrior.Task) projects.Counts {
+	c := projects.Counts{ByProject: make(map[string]int)}
+	for _, t := range tasks {
+		if t.Status != "pending" {
+			continue
+		}
+		c.All++
+		if t.Project == "" {
+			c.None++
+			continue
+		}
+		c.ByProject[t.Project]++
+	}
+	return c
+}
+
+// mergeKnownProjects folds newly-seen project names into the session's
+// running set of known projects and returns the sorted union. This makes a
+// project "sticky" for the remainder of the session once it's been seen
+// with at least one pending task: deleting or completing its last pending
+// task (which would otherwise make it vanish from an unfiltered
+// status:pending query) still leaves the project visible, now showing
+// "(0)", until the app restarts. On restart the set starts empty again, so
+// a project with no pending tasks left simply won't reappear.
+func (m *model) mergeKnownProjects(names []string) []string {
+	if m.knownProjects == nil {
+		m.knownProjects = make(map[string]struct{})
+	}
+	for _, n := range names {
+		m.knownProjects[n] = struct{}{}
+	}
+	merged := make([]string, 0, len(m.knownProjects))
+	for n := range m.knownProjects {
+		merged = append(merged, n)
+	}
+	sort.Strings(merged)
+	return merged
 }
 
 // distinctProjects returns the sorted set of distinct, non-empty project
@@ -584,6 +657,44 @@ func editTaskCallback(importer TaskImporter, session *editor.Session, original t
 	}
 }
 
+// renameProject returns a tea.Cmd that renames a project across every task
+// that belongs to it, regardless of status (pending, completed, or
+// deleted): it fetches all three statuses via reader, filters to those
+// whose Project field exactly matches from, rewrites that field to to on
+// each, and re-imports the batch via importer (the same Export-then-Import
+// round trip editTask already uses, rather than a dedicated taskwarrior CLI
+// mutation, so exact-match filtering is done in Go instead of relying on
+// Taskwarrior's project-hierarchy filter semantics).
+func renameProject(reader TaskReader, importer TaskImporter, from, to string) tea.Cmd {
+	return func() tea.Msg {
+		tasks, err := reader.Export(context.Background(), "status:pending", "or", "status:completed", "or", "status:deleted")
+		if err != nil {
+			return projectRenameErrMsg{err: err}
+		}
+
+		var matched []taskwarrior.Task
+		for _, t := range tasks {
+			if t.Project != from {
+				continue
+			}
+			t.Project = to
+			matched = append(matched, t)
+		}
+		if len(matched) == 0 {
+			return projectRenamedMsg{to: to}
+		}
+
+		data, err := json.Marshal(matched)
+		if err != nil {
+			return projectRenameErrMsg{err: err}
+		}
+		if err := importer.Import(context.Background(), data); err != nil {
+			return projectRenameErrMsg{err: err}
+		}
+		return projectRenamedMsg{to: to}
+	}
+}
+
 func (m model) Init() tea.Cmd {
 	return tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 }
@@ -613,6 +724,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.restoring {
 		return m.updateRestoring(msg)
+	}
+	if m.renaming {
+		return m.updateRenaming(msg)
+	}
+	if m.renameConfirm {
+		return m.updateRenameConfirm(msg)
 	}
 
 	switch msg := msg.(type) {
@@ -649,6 +766,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the shared filter and refetch Tasks immediately (no "enter"
 		// required).
 		if m.focus == focusProjects {
+			if msg.String() == "R" {
+				if label, ok := m.projects.Selected(); ok && label != projects.AllLabel && label != projects.NoneLabel {
+					m.renaming = true
+					m.renameFrom = label
+					m.renameInput = addform.NewNamed("Rename Project", "Press <enter> to rename, <esc> to cancel", "New project name...").Focus().SetValue(label)
+					return m, m.renameInput.Init()
+				}
+				return m, nil
+			}
 			var cmd tea.Cmd
 			m.projects, cmd = m.projects.Update(msg)
 			if label, ok := m.projects.Selected(); ok {
@@ -721,7 +847,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case projectsLoadedMsg:
-		m.projects = m.projects.SetProjects(msg.projects)
+		m.projects = m.projects.SetProjects(m.mergeKnownProjects(msg.projects)).SetCounts(msg.counts)
 		return m, nil
 	case projectsErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
@@ -734,28 +860,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
-		return m, fetchTasks(m.reader, m.taskFilters()...)
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskDoneErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
-		return m, fetchTasks(m.reader, m.taskFilters()...)
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskRestoredMsg:
-		return m, fetchTasks(m.reader, m.taskFilters()...)
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskRestoreErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPurgedMsg:
-		return m, fetchTasks(m.reader, m.taskFilters()...)
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskEditErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case projectRenamedMsg:
+		newFilter := m.filter
+		if m.filter.project != nil && *m.filter.project == m.renameFrom {
+			newFilter = m.filter.withProjectSelection(msg.to)
+		}
+		m.filter = newFilter
+		m.renameFrom = ""
+		m.renameTo = ""
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+	case projectRenameErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	}
@@ -906,6 +1044,67 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateRenaming handles messages while the rename-project input panel is
+// focused: entering a new name for m.renameFrom. Leading/trailing
+// whitespace is trimmed before it's used for anything (comparison,
+// display, or the eventual rename), so "  chores" and "chores " both
+// resolve to "chores". An unchanged (or empty) name is a silent no-op back
+// to the Projects panel; otherwise it proceeds to a confirmation step,
+// which is the merge-warning (danger) variant if the trimmed name matches
+// an existing, different project.
+func (m model) updateRenaming(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.renaming = false
+			m.renameInput = m.renameInput.Blur()
+			return m, nil
+		case "enter":
+			to := strings.TrimSpace(m.renameInput.Value())
+			m.renaming = false
+			m.renameInput = m.renameInput.Blur()
+			if to == "" || to == m.renameFrom {
+				return m, nil
+			}
+			m.renameTo = to
+			m.renameConfirm = true
+			for _, p := range m.projects.Projects() {
+				if p == to {
+					m.renameMerging = true
+					break
+				}
+			}
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.renameInput, cmd = m.renameInput.Update(msg)
+	return m, cmd
+}
+
+// updateRenameConfirm handles messages while a project-rename confirmation
+// (either the normal or the merge-warning/danger variant) is pending.
+func (m model) updateRenameConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "enter":
+			m.renameConfirm = false
+			m.renameMerging = false
+			return m, renameProject(m.reader, m.importer, m.renameFrom, m.renameTo)
+		case "n", "esc":
+			m.renameConfirm = false
+			m.renameMerging = false
+			m.renameFrom = ""
+			m.renameTo = ""
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
 // screenDims returns the model's last known terminal size, falling back to
 // the same defaults gridDims() uses when no tea.WindowSizeMsg has arrived
 // yet (e.g. in tests calling View() directly).
@@ -983,6 +1182,22 @@ func (m model) View() string {
 			} else {
 				text = fmt.Sprintf("Restore %q as a todo?", task.Description)
 			}
+			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
+		}
+	}
+
+	if m.renaming {
+		view = popup.Overlay(view, m.renameInput.View(), width, height)
+	}
+
+	if m.renameConfirm {
+		if m.renameMerging {
+			text := fmt.Sprintf(
+				"Renaming project %q to %q will merge its tasks into the existing project %q (including done/deleted tasks). This cannot be undone. Continue?",
+				m.renameFrom, m.renameTo, m.renameTo)
+			view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
+		} else {
+			text := fmt.Sprintf("Rename project %q to %q? This updates every task in this project, including done/deleted ones.", m.renameFrom, m.renameTo)
 			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
 		}
 	}

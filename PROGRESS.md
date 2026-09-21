@@ -111,6 +111,38 @@
   - Follow-up: all confirm popups now accept `enter` as well as `y`;
     `popup.ConfirmBox` hint text updated to mention both.
 
+- ✅ **Project rename + Projects-panel task counts — DONE.** Ad-hoc feature
+  (direct instruction, not from the Section 7 backlog), delivered as 2
+  signed-off chunks:
+  - Chunk 1 (counts): Projects panel entries show a fixed-width `(N)`
+    task-count suffix, right-aligned so counts stay visually aligned;
+    counts only pending ("todo lane") tasks. `(all)` shows the total
+    pending count, `(none)` shows the pending count of projectless tasks.
+  - Chunk 2 (rename): `Shift+R` on a real project opens a rename
+    text-input box (generalized `internal/ui/addform` via new
+    `NewNamed`/`SetValue` API), pre-filled with the current name and
+    trimming leading/trailing whitespace on submit. Confirming (orange
+    `ConfirmBox`) renames the project on every task regardless of status,
+    via the existing `Export`/`Import` round-trip with exact-match
+    filtering done in Go (avoids taskwarrior's prefix-matching project
+    filters). If the trimmed target name collides with an existing
+    different project, a second red `DangerConfirmBox` (new
+    `popup.DangerConfirmBox`) warns the rename will merge tasks into that
+    project. The active project filter follows the rename when it was
+    pointed at the renamed project.
+  - Follow-up bugfix (QA feedback, same feature): projects were vanishing
+    entirely once their last pending task was deleted (or lingering
+    forever post-restart if all their tasks were already done), since
+    `fetchProjects` rebuilt the whole list from scratch each refresh. Now
+    scoped to `status:pending` only, unioned each fetch into a new
+    session-lifetime `knownProjects` set on `model` — a project stays
+    visible at `(0)` for the rest of the session once seen, but won't
+    reappear after a restart if it has no pending tasks left. Also fixed a
+    separate stale-counts bug: marking done, deleting, restoring, and
+    purging only refreshed the Tasks list, never the Projects panel, so
+    `(N)` could be left showing a stale non-zero count; all four actions
+    now refresh both panels.
+
 ## Up Next
 
 Next work comes from requirements.md §7 "Future Phases":

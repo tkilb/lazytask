@@ -102,3 +102,13 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+func TestDangerConfirmBoxContainsText(t *testing.T) {
+	out := DangerConfirmBox("merge warning text", 80)
+	if !contains(out, "merge warning text") {
+		t.Errorf("DangerConfirmBox output missing body text: %q", out)
+	}
+	if !contains(out, "Confirm") {
+		t.Errorf("DangerConfirmBox output missing title: %q", out)
+	}
+}

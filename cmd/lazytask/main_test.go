@@ -22,13 +22,15 @@ import (
 // stubReader is a test double for TaskReader, avoiding any real `task`
 // process invocation.
 type stubReader struct {
-	tasks []taskwarrior.Task
-	err   error
-	calls int
+	tasks       []taskwarrior.Task
+	err         error
+	calls       int
+	lastFilters []string
 }
 
 func (s *stubReader) Export(ctx context.Context, filters ...string) ([]taskwarrior.Task, error) {
 	s.calls++
+	s.lastFilters = filters
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -617,10 +619,10 @@ func TestModelUpdate_CompletingConfirmYDonesOnTodoTab(t *testing.T) {
 	newModel, refreshCmd := m.Update(msg)
 	m = newModel.(model)
 	require.NotNil(t, refreshCmd)
-	refreshMsg := refreshCmd()
-	_, ok = refreshMsg.(tasksLoadedMsg)
+	refreshMsgs := runBatch(refreshCmd)
+	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
-	assert.Equal(t, 1, reader.calls)
+	assert.Equal(t, 2, reader.calls, "expected both a task refresh and a projects refresh (so counts stay in sync)")
 }
 
 // TestModelUpdate_CompletingConfirmYRestoresThenDonesOnDeletedTab verifies
@@ -760,8 +762,8 @@ func TestModelUpdate_DeletingConfirmYDeletes(t *testing.T) {
 	newModel, refreshCmd := m.Update(msg)
 	m = newModel.(model)
 	require.NotNil(t, refreshCmd)
-	refreshMsg := refreshCmd()
-	_, ok = refreshMsg.(tasksLoadedMsg)
+	refreshMsgs := runBatch(refreshCmd)
+	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
 }
 
@@ -926,10 +928,10 @@ func TestModelUpdate_RestoringConfirmYRestoresOnDoneTab(t *testing.T) {
 	newModel, refreshCmd := m.Update(msg)
 	m = newModel.(model)
 	require.NotNil(t, refreshCmd)
-	refreshMsg := refreshCmd()
-	_, ok = refreshMsg.(tasksLoadedMsg)
+	refreshMsgs := runBatch(refreshCmd)
+	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
-	assert.Equal(t, 1, reader.calls)
+	assert.Equal(t, 2, reader.calls, "expected both a task refresh and a projects refresh (so counts stay in sync)")
 }
 
 func TestModelUpdate_RestoringConfirmYRestoresOnDeletedTab(t *testing.T) {
@@ -986,9 +988,16 @@ func TestModelUpdate_TaskRestoredMsgTriggersRefresh(t *testing.T) {
 	newModel, cmd := m.Update(taskRestoredMsg{})
 	_ = newModel.(model)
 	require.NotNil(t, cmd)
-	msg := cmd()
-	_, ok := msg.(tasksLoadedMsg)
-	assert.True(t, ok)
+	msgs := runBatch(cmd)
+	_, sawTasks := findTasksLoaded(msgs)
+	assert.True(t, sawTasks, "expected a task refresh after restore")
+	var sawProjects bool
+	for _, msg := range msgs {
+		if _, ok := msg.(projectsLoadedMsg); ok {
+			sawProjects = true
+		}
+	}
+	assert.True(t, sawProjects, "expected a projects refresh after restore, so counts stay in sync")
 }
 
 func TestModelUpdate_TaskRestoreErrMsgSetsErr(t *testing.T) {
@@ -1025,8 +1034,8 @@ func TestModelUpdate_PurgingConfirmYPurges(t *testing.T) {
 	newModel, refreshCmd := m.Update(msg)
 	m = newModel.(model)
 	require.NotNil(t, refreshCmd)
-	refreshMsg := refreshCmd()
-	_, ok = refreshMsg.(tasksLoadedMsg)
+	refreshMsgs := runBatch(refreshCmd)
+	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
 }
 
@@ -1067,9 +1076,16 @@ func TestModelUpdate_TaskPurgedMsgTriggersRefresh(t *testing.T) {
 	newModel, cmd := m.Update(taskPurgedMsg{})
 	_ = newModel.(model)
 	require.NotNil(t, cmd)
-	msg := cmd()
-	_, ok := msg.(tasksLoadedMsg)
-	assert.True(t, ok)
+	msgs := runBatch(cmd)
+	_, sawTasks := findTasksLoaded(msgs)
+	assert.True(t, sawTasks, "expected a task refresh after purge")
+	var sawProjects bool
+	for _, msg := range msgs {
+		if _, ok := msg.(projectsLoadedMsg); ok {
+			sawProjects = true
+		}
+	}
+	assert.True(t, sawProjects, "expected a projects refresh after purge, so counts stay in sync")
 }
 
 func TestModelUpdate_TaskPurgeErrMsgSetsErr(t *testing.T) {
@@ -1373,6 +1389,307 @@ func TestEditTaskCallback_ImportErrSetsErrMsg(t *testing.T) {
 	msg := editTaskCallback(importer, session, original)(nil)
 
 	errMsg, ok := msg.(taskEditErrMsg)
+	require.True(t, ok)
+	assert.Contains(t, errMsg.err.Error(), "import failed")
+}
+
+func TestProjectCounts_OnlyCountsPendingTasks(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Status: "pending", Project: "chores"},
+		{ID: 2, Status: "pending", Project: "chores"},
+		{ID: 3, Status: "completed", Project: "chores"},
+		{ID: 4, Status: "pending", Project: ""},
+		{ID: 5, Status: "completed", Project: ""},
+	}
+
+	counts := projectCounts(tasks)
+
+	assert.Equal(t, 3, counts.All, "only the 3 pending tasks should count toward (all)")
+	assert.Equal(t, 1, counts.None, "only the 1 pending, project-less task should count toward (none)")
+	assert.Equal(t, 2, counts.ByProject["chores"], "the completed chores task should not be counted")
+}
+
+// projectsPanelOnEntry builds a Projects-panel-focused model with the
+// given project names loaded and the cursor moved down to the entry at
+// index (0-based, counting the (all)/(none) special entries first).
+func projectsPanelOnEntry(names []string, index int) model {
+	m := model{
+		reader:   &stubReader{},
+		list:     tasklist.New(nil),
+		projects: projects.New().SetProjects(names),
+		focus:    focusProjects,
+	}
+	for i := 0; i < index; i++ {
+		var newModel tea.Model
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(model)
+	}
+	return m
+}
+
+func TestModelUpdate_ShiftRKeyEntersRenamingOnRealProject(t *testing.T) {
+	m := projectsPanelOnEntry([]string{"chores", "home"}, 2) // (all), (none), chores
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	m = newModel.(model)
+	assert.True(t, m.renaming)
+	assert.Equal(t, "chores", m.renameFrom)
+	assert.Equal(t, "chores", m.renameInput.Value())
+	assert.True(t, m.renameInput.Focused())
+	require.NotNil(t, cmd) // textinput.Blink from Init()
+}
+
+func TestModelUpdate_ShiftRKeyOnAllOrNoneIsNoOp(t *testing.T) {
+	for _, idx := range []int{0, 1} { // (all), (none)
+		m := projectsPanelOnEntry([]string{"chores"}, idx)
+		newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+		m = newModel.(model)
+		assert.False(t, m.renaming)
+		assert.Nil(t, cmd)
+	}
+}
+
+func TestModelUpdate_RenamingEnterWithNewNameEntersConfirm(t *testing.T) {
+	m := projectsPanelOnEntry([]string{"chores", "home"}, 2)
+	m.renaming = true
+	m.renameFrom = "chores"
+	m.renameInput = m.renameInput.SetValue("errands")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.renaming)
+	assert.True(t, m.renameConfirm)
+	assert.False(t, m.renameMerging)
+	assert.Equal(t, "errands", m.renameTo)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_RenamingEnterWithExistingProjectNameEntersMergeConfirm(t *testing.T) {
+	m := projectsPanelOnEntry([]string{"chores", "home"}, 2)
+	m.renaming = true
+	m.renameFrom = "chores"
+	m.renameInput = m.renameInput.SetValue("home")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.renaming)
+	assert.True(t, m.renameConfirm)
+	assert.True(t, m.renameMerging, "renaming onto an existing project name should trigger the merge warning")
+	assert.Equal(t, "home", m.renameTo)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_RenamingEnterTrimsWhitespace(t *testing.T) {
+	m := projectsPanelOnEntry([]string{"chores", "home"}, 2)
+	m.renaming = true
+	m.renameFrom = "chores"
+	m.renameInput = m.renameInput.SetValue("  home  ")
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.True(t, m.renameConfirm)
+	assert.True(t, m.renameMerging)
+	assert.Equal(t, "home", m.renameTo)
+}
+
+func TestModelUpdate_RenamingEnterSameNameIsNoOp(t *testing.T) {
+	m := projectsPanelOnEntry([]string{"chores"}, 2)
+	m.renaming = true
+	m.renameFrom = "chores"
+	m.renameInput = m.renameInput.SetValue("  chores  ")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.renaming)
+	assert.False(t, m.renameConfirm)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_RenamingEnterEmptyIsNoOp(t *testing.T) {
+	m := projectsPanelOnEntry([]string{"chores"}, 2)
+	m.renaming = true
+	m.renameFrom = "chores"
+	m.renameInput = m.renameInput.SetValue("   ")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.renaming)
+	assert.False(t, m.renameConfirm)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_RenamingEscCancels(t *testing.T) {
+	m := projectsPanelOnEntry([]string{"chores"}, 2)
+	m.renaming = true
+	m.renameFrom = "chores"
+	m.renameInput = m.renameInput.SetValue("errands")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.renaming)
+	assert.False(t, m.renameInput.Focused())
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_RenameConfirmYTriggersRenameProject(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{
+		{ID: 1, UUID: "u1", Status: "pending", Project: "chores"},
+		{ID: 2, UUID: "u2", Status: "completed", Project: "chores"},
+		{ID: 3, UUID: "u3", Status: "deleted", Project: "chores"},
+		{ID: 4, UUID: "u4", Status: "pending", Project: "home"},
+	}}
+	importer := &stubImporter{}
+	m := model{
+		reader:        reader,
+		importer:      importer,
+		renameConfirm: true,
+		renameFrom:    "chores",
+		renameTo:      "errands",
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = newModel.(model)
+	assert.False(t, m.renameConfirm)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	renamedMsg, ok := msg.(projectRenamedMsg)
+	require.True(t, ok)
+	assert.Equal(t, "errands", renamedMsg.to)
+
+	require.Len(t, importer.calls, 1)
+	var updated []taskwarrior.Task
+	require.NoError(t, json.Unmarshal(importer.calls[0], &updated))
+	require.Len(t, updated, 3, "all 3 chores tasks (pending/completed/deleted) should be renamed, but not the home task")
+	for _, task := range updated {
+		assert.Equal(t, "errands", task.Project)
+	}
+}
+
+func TestModelUpdate_RenameConfirmNCancels(t *testing.T) {
+	importer := &stubImporter{}
+	m := model{
+		importer:      importer,
+		renameConfirm: true,
+		renameMerging: true,
+		renameFrom:    "chores",
+		renameTo:      "home",
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = newModel.(model)
+	assert.False(t, m.renameConfirm)
+	assert.False(t, m.renameMerging)
+	assert.Empty(t, importer.calls)
+	assert.Nil(t, cmd)
+}
+
+func TestFetchProjects_QueriesOnlyPendingTasks(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Project: "chores", Status: "pending"}}}
+	cmd := fetchProjects(reader)
+	msg := cmd()
+	require.IsType(t, projectsLoadedMsg{}, msg)
+	assert.Equal(t, []string{"status:pending"}, reader.lastFilters, "fetchProjects should not include completed/deleted tasks, so an all-done project doesn't reappear after restart")
+}
+
+func TestModel_KnownProjectsStickyWithinSession(t *testing.T) {
+	m := model{
+		reader:   &stubReader{},
+		list:     tasklist.New(nil),
+		projects: projects.New(),
+	}
+
+	// First fetch sees "chores" with one pending task.
+	newModel, _ := m.Update(projectsLoadedMsg{
+		projects: []string{"chores"},
+		counts:   projects.Counts{All: 1, ByProject: map[string]int{"chores": 1}},
+	})
+	m = newModel.(model)
+	assert.Equal(t, []string{"chores"}, m.projects.Projects())
+
+	// The last "chores" task is deleted, so a fresh unfiltered pending
+	// query no longer reports it at all. It should still show, now at 0.
+	newModel, _ = m.Update(projectsLoadedMsg{
+		projects: nil,
+		counts:   projects.Counts{ByProject: map[string]int{}},
+	})
+	m = newModel.(model)
+	assert.Equal(t, []string{"chores"}, m.projects.Projects(), "chores should remain visible for the rest of the session")
+}
+
+func TestModel_MergeKnownProjects_UnionsAndSorts(t *testing.T) {
+	m := model{}
+	got := m.mergeKnownProjects([]string{"chores", "errands"})
+	assert.Equal(t, []string{"chores", "errands"}, got)
+
+	got = m.mergeKnownProjects([]string{"errands", "yardwork"})
+	assert.Equal(t, []string{"chores", "errands", "yardwork"}, got, "previously seen projects should persist even if absent from a later fetch")
+}
+
+func TestModelUpdate_ProjectRenamedMsgUpdatesFollowingFilterAndRefreshes(t *testing.T) {
+	reader := &stubReader{}
+	m := model{
+		reader:     reader,
+		list:       tasklist.New(nil),
+		renameFrom: "chores",
+		filter:     filterState{}.withProjectSelection("chores"),
+	}
+
+	newModel, cmd := m.Update(projectRenamedMsg{to: "errands"})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "project:errands", m.filter.taskFilter(), "the active filter should follow the renamed project")
+
+	msgs := runBatch(cmd)
+	var sawTasks, sawProjects bool
+	for _, msg := range msgs {
+		switch msg.(type) {
+		case tasksLoadedMsg, tasksErrMsg:
+			sawTasks = true
+		case projectsLoadedMsg, projectsErrMsg:
+			sawProjects = true
+		}
+	}
+	assert.True(t, sawTasks, "expected a task refresh after rename")
+	assert.True(t, sawProjects, "expected a projects refresh after rename")
+}
+
+func TestModelUpdate_ProjectRenameErrMsgSetsErr(t *testing.T) {
+	m := model{}
+	wantErr := errors.New("rename failed")
+	newModel, cmd := m.Update(projectRenameErrMsg{err: wantErr})
+	m = newModel.(model)
+	assertErrPopup(t, m, wantErr)
+	assert.Nil(t, cmd)
+}
+
+func TestRenameProject_OnlyImportsWhenMatchesExist(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Project: "home"}}}
+	importer := &stubImporter{}
+
+	msg := renameProject(reader, importer, "chores", "errands")()
+	renamedMsg, ok := msg.(projectRenamedMsg)
+	require.True(t, ok)
+	assert.Equal(t, "errands", renamedMsg.to)
+	assert.Empty(t, importer.calls, "no matching tasks means Import should not be called")
+}
+
+func TestRenameProject_ExportErrSetsErrMsg(t *testing.T) {
+	reader := &stubReader{err: errors.New("export failed")}
+	importer := &stubImporter{}
+
+	msg := renameProject(reader, importer, "chores", "errands")()
+	errMsg, ok := msg.(projectRenameErrMsg)
+	require.True(t, ok)
+	assert.Contains(t, errMsg.err.Error(), "export failed")
+}
+
+func TestRenameProject_ImportErrSetsErrMsg(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Project: "chores"}}}
+	importer := &stubImporter{err: errors.New("import failed")}
+
+	msg := renameProject(reader, importer, "chores", "errands")()
+	errMsg, ok := msg.(projectRenameErrMsg)
 	require.True(t, ok)
 	assert.Contains(t, errMsg.err.Error(), "import failed")
 }
