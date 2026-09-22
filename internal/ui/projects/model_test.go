@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -136,4 +137,41 @@ func TestModel_SelectLabelLeavesCursorUnchangedWhenLabelMissing(t *testing.T) {
 	label, ok := m.Selected()
 	require.True(t, ok)
 	assert.Equal(t, "work", label, "cursor should stay put when the requested label isn't a current entry")
+}
+
+func TestModel_View_ShowsPositionFooter(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
+
+	view := m.View()
+	// (all), (none), home, work -> 4 entries, cursor starts at (all) = 1 of 4.
+	assert.Contains(t, view, "1 of 4")
+}
+
+func manyProjects(n int) []string {
+	names := make([]string, n)
+	for i := 0; i < n; i++ {
+		names[i] = fmt.Sprintf("project-%02d", i)
+	}
+	return names
+}
+
+func TestModel_View_ScrollsToKeepCursorVisible(t *testing.T) {
+	// Height 8 gives 6 inner rows (InnerSize subtracts 2 for borders); with
+	// 22 entries (20 projects + 2 special), only 6 are visible at once.
+	m := New().SetProjects(manyProjects(20))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+
+	view := m.View()
+	assert.Contains(t, view, AllLabel)
+	assert.NotContains(t, view, "project-19")
+
+	for i := 0; i < 21; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+
+	view = m.View()
+	assert.Contains(t, view, "project-19")
+	assert.NotContains(t, view, AllLabel)
+	assert.Contains(t, view, "22 of 22")
 }

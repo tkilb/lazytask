@@ -122,13 +122,12 @@ keybinding architecture + Done/Deleted task reopen/restore/purge; project
 rename + Projects-panel task counts; global add key with project-filter
 auto-assign on new tasks; general panel layout (grid + focus nav; Status
 panel key `1`; Tasks panel status tabs Todo/Done/Deleted; shared filter
-state + Projects panel key `3`; Details panel key `0`).
+state + Projects panel key `3`; Details panel key `0`); Tasks and Projects
+panel scrolling, plus a lazygit-style "N of M" position footer embedded in
+the bottom border of both panels (`internal/ui/panel.ScrollWindow` +
+`Frame`/`FrameTabs` optional footer arg).
 
-Remaining:
-
-- **Tasks panel scrolling** — when the task list is taller than the panel's
-  assigned height, it should scroll instead of overflowing unclipped
-  (current behavior). Not yet scoped/chunked.
+Phase 2 is now complete — nothing remaining is currently scoped.
 
 ### Phase 3 — Customization
 

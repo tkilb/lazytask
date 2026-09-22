@@ -1,6 +1,7 @@
 package tasklist
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -228,4 +229,52 @@ func TestModel_View_ShowsActiveTabHighlighted(t *testing.T) {
 
 	view := m.View()
 	assert.True(t, strings.Contains(view, "[2]-Todo - Done - Deleted"))
+}
+
+func TestModel_View_ShowsPositionFooter(t *testing.T) {
+	m := New(sampleTasks())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	view := m.View()
+	assert.Contains(t, view, "2 of 3")
+}
+
+func TestModel_View_EmptyOmitsPositionFooter(t *testing.T) {
+	m := New(nil)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	view := m.View()
+	assert.NotContains(t, view, "0 of 0")
+}
+
+func manyTasks(n int) []taskwarrior.Task {
+	tasks := make([]taskwarrior.Task, n)
+	for i := 0; i < n; i++ {
+		tasks[i] = taskwarrior.Task{ID: i + 1, Description: fmt.Sprintf("task %d", i+1)}
+	}
+	return tasks
+}
+
+func TestModel_View_ScrollsToKeepCursorVisible(t *testing.T) {
+	// Height 8 gives 6 inner rows (InnerSize subtracts 2 for borders), minus
+	// 1 for the header, so only 5 task rows are visible at once.
+	m := New(manyTasks(20))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+
+	// Still at the top: task 1 visible, task 20 (off-screen) is not.
+	view := m.View()
+	assert.Contains(t, view, "task 1")
+	assert.NotContains(t, view, "task 20")
+
+	for i := 0; i < 19; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+
+	// Cursor is now on the last task; the window should have scrolled so
+	// it's visible, and the first task has scrolled out of view.
+	view = m.View()
+	assert.Contains(t, view, "task 20")
+	assert.NotContains(t, view, "task 1 ")
+	assert.Contains(t, view, "20 of 20")
 }

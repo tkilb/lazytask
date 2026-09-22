@@ -198,6 +198,14 @@ func (m Model) View() string {
 		innerWidth = 20
 	}
 
+	_, innerHeight := panel.InnerSize(width, m.height)
+	// One row is reserved for the header, so the list body scrolls within
+	// whatever remains.
+	visibleRows := innerHeight - 1
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(formatRow(innerWidth, "ID", "Description", "Project", "Priority", "Due")))
 	b.WriteString("\n")
@@ -205,7 +213,9 @@ func (m Model) View() string {
 	if len(m.tasks) == 0 {
 		b.WriteString("(no tasks)")
 	} else {
-		for i, t := range m.tasks {
+		start, end := panel.ScrollWindow(m.cursor, len(m.tasks), visibleRows)
+		for i := start; i < end; i++ {
+			t := m.tasks[i]
 			row := formatRow(innerWidth,
 				fmt.Sprintf("%d", t.ID),
 				t.Description,
@@ -217,7 +227,7 @@ func (m Model) View() string {
 				row = selectedRowStyle.Render(row)
 			}
 			b.WriteString(row)
-			if i < len(m.tasks)-1 {
+			if i < end-1 {
 				b.WriteString("\n")
 			}
 		}
@@ -225,22 +235,16 @@ func (m Model) View() string {
 
 	body := b.String()
 
-	// Fill out to the panel's assigned height (from the last
-	// tea.WindowSizeMsg) rather than shrinking to just however many lines
-	// the task list happens to need, so the panel doesn't leave a gap below
-	// it in the surrounding grid. If there are more tasks than fit, the
-	// body is left to overflow for now (scrolling is a follow-up feature).
-	_, innerHeight := panel.InnerSize(width, m.height)
-	contentHeight := strings.Count(body, "\n") + 1
-	if innerHeight > contentHeight {
-		contentHeight = innerHeight
-	}
-
 	tabs := make([]panel.Tab, len(statusTabs))
 	for i, t := range statusTabs {
 		tabs[i] = panel.Tab{Label: t.Label(), Active: t == m.status}
 	}
-	return panel.FrameTabs('2', tabs, body, innerWidth, contentHeight, m.focused)
+
+	footer := ""
+	if len(m.tasks) > 0 {
+		footer = fmt.Sprintf("%d of %d", m.cursor+1, len(m.tasks))
+	}
+	return panel.FrameTabs('2', tabs, body, innerWidth, innerHeight, m.focused, footer)
 }
 
 // formatRow lays out the fixed-width columns used by both the header and

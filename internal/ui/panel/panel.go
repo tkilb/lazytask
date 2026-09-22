@@ -72,6 +72,32 @@ func Render(title, body string, outerWidth, outerHeight int, focused bool) strin
 	return Frame(title, body, width, height, focused)
 }
 
+// ScrollWindow returns the [start, end) slice bounds of a scrollable list of
+// totalItems entries, sized so exactly visibleRows are shown, such that
+// cursor always falls within [start, end). It is a pure function of
+// (cursor, totalItems, visibleRows) — callers don't need to persist a
+// scroll offset across renders. If totalItems fits within visibleRows,
+// start is always 0 and end is totalItems.
+func ScrollWindow(cursor, totalItems, visibleRows int) (start, end int) {
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+	if totalItems <= visibleRows {
+		return 0, totalItems
+	}
+
+	maxStart := totalItems - visibleRows
+	start = cursor - visibleRows + 1
+	if start < 0 {
+		start = 0
+	}
+	if start > maxStart {
+		start = maxStart
+	}
+	end = start + visibleRows
+	return start, end
+}
+
 // InnerSize converts a panel's total outer footprint (border included) into
 // the content width/height available inside the border, clamped to sane
 // minimums. Since the title now lives in the top border line rather than a
@@ -91,10 +117,25 @@ func InnerSize(outerWidth, outerHeight int) (width, height int) {
 // Frame wraps body (already sized to width columns and up to height rows)
 // in a rounded border of exactly width+2 x height+2, with title embedded in
 // the top border line rather than as a separate content row.
-func Frame(title, body string, width, height int, focused bool) string {
+//
+// An optional footer (e.g. a lazygit-style "3/10" scroll position
+// indicator) may be passed, which is embedded right-aligned in the bottom
+// border line instead of consuming a content row. Only the first footer
+// argument is used; it exists as a variadic parameter purely so existing
+// callers that don't need a footer aren't required to pass "".
+func Frame(title, body string, width, height int, focused bool, footer ...string) string {
 	lineStyle := lipgloss.NewStyle().Foreground(borderColor(focused))
 	top := topBorder(title, width, focused, lineStyle)
-	return frameBody(top, body, width, height, lineStyle)
+	return frameBody(top, firstFooter(footer), body, width, height, lineStyle)
+}
+
+// firstFooter returns the first element of footer, or "" if it's empty, so
+// Frame/FrameTabs can accept an optional trailing footer argument.
+func firstFooter(footer []string) string {
+	if len(footer) == 0 {
+		return ""
+	}
+	return footer[0]
 }
 
 // Tab describes one segment of a multi-tab panel title (see FrameTabs),
@@ -107,17 +148,19 @@ type Tab struct {
 // FrameTabs is like Frame, but embeds a row of tabs in the title instead of
 // a single label (e.g. "╭─[2]-Todo - Done - Deleted─╮"), styling the
 // active tab distinctly (inverted) from the others so the current tab is
-// visually obvious.
-func FrameTabs(number rune, tabs []Tab, body string, width, height int, focused bool) string {
+// visually obvious. Like Frame, an optional footer may be passed to embed
+// a right-aligned scroll position indicator in the bottom border.
+func FrameTabs(number rune, tabs []Tab, body string, width, height int, focused bool, footer ...string) string {
 	lineStyle := lipgloss.NewStyle().Foreground(borderColor(focused))
 	top := topBorderTabs(number, tabs, width, focused, lineStyle)
-	return frameBody(top, body, width, height, lineStyle)
+	return frameBody(top, firstFooter(footer), body, width, height, lineStyle)
 }
 
 // frameBody renders the shared border/content assembly used by both Frame
-// and FrameTabs, given an already-built top border line.
-func frameBody(top, body string, width, height int, lineStyle lipgloss.Style) string {
-	bottom := lineStyle.Render("╰" + strings.Repeat("─", width) + "╯")
+// and FrameTabs, given an already-built top border line and an optional
+// footer to embed in the bottom border line.
+func frameBody(top, footer, body string, width, height int, lineStyle lipgloss.Style) string {
+	bottom := bottomBorder(footer, width, lineStyle)
 
 	// Height/Width here size only the content area; the border characters
 	// are added separately above/below/around it.
@@ -157,6 +200,37 @@ func topBorder(title string, width int, focused bool, lineStyle lipgloss.Style) 
 	b.WriteString(TitleStyle(focused).Render(label))
 	b.WriteString(lineStyle.Render(strings.Repeat("─", fill) + "╮"))
 	return b.String()
+}
+
+// bottomBorder builds the bottom border line, optionally embedding footer
+// right-aligned near the corner (lazygit-style, e.g.
+// "╰──────────────────3/10─╮"). If footer is empty, a plain unbroken
+// border is returned. If footer doesn't fit within width, it's dropped
+// entirely rather than truncated (a garbled "3/1…" position indicator is
+// worse than no indicator at all).
+func bottomBorder(footer string, width int, lineStyle lipgloss.Style) string {
+	if footer == "" || len(footer) > width {
+		return lineStyle.Render("╰" + strings.Repeat("─", width) + "╯")
+	}
+
+	const trailDashes = 1
+	fill := width - trailDashes - len(footer)
+	if fill < 0 {
+		fill = 0
+	}
+
+	var b strings.Builder
+	b.WriteString(lineStyle.Render("╰" + strings.Repeat("─", fill)))
+	b.WriteString(footerStyle().Render(footer))
+	b.WriteString(lineStyle.Render(strings.Repeat("─", trailDashes) + "╯"))
+	return b.String()
+}
+
+// footerStyle renders a Frame/FrameTabs footer (e.g. a scroll position
+// indicator) in a dim, unobtrusive color independent of panel focus, since
+// it's informational rather than a focus/selection cue.
+func footerStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(inactiveTabColor)
 }
 
 // activeTabStyle highlights whichever tab is currently selected within a

@@ -181,17 +181,27 @@ func (m Model) View() string {
 	innerWidth, innerHeight := panel.InnerSize(width, m.height)
 
 	entries := m.entries()
-	lines := make([]string, len(entries))
-	for i, e := range entries {
-		line := m.displayLine(e, innerWidth)
+	visibleRows := innerHeight
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+	start, end := panel.ScrollWindow(m.cursor, len(entries), visibleRows)
+
+	lines := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		line := m.displayLine(entries[i], innerWidth)
 		if i == m.cursor {
 			line = selectedRowStyle.Render(line)
 		}
-		lines[i] = line
+		lines = append(lines, line)
 	}
 	body := strings.Join(lines, "\n")
 
-	return panel.Frame("3 Projects", body, innerWidth, innerHeight, m.focused)
+	footer := ""
+	if len(entries) > 0 {
+		footer = fmt.Sprintf("%d of %d", m.cursor+1, len(entries))
+	}
+	return panel.Frame("3 Projects", body, innerWidth, innerHeight, m.focused, footer)
 }
 
 // countFieldWidth is the fixed width reserved for the "(N)" count field
