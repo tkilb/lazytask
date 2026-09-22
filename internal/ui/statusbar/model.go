@@ -11,9 +11,11 @@ import (
 )
 
 var (
+	// keyStyle uses ANSI blue (SGR 34), matching lazygit's default
+	// options-bar color (theme.OptionsTextColor: "blue").
 	keyStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("62"))
+			Foreground(lipgloss.Color("4"))
 
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("245"))

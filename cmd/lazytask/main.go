@@ -1210,14 +1210,14 @@ func (m model) View() string {
 			} else {
 				text = fmt.Sprintf("Delete %q?", task.Description)
 			}
-			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
+			view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
 		}
 	}
 
 	if m.purging {
 		if task, ok := m.list.Selected(); ok {
 			text := fmt.Sprintf("Permanently delete %q? This cannot be undone.", task.Description)
-			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
+			view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
 		}
 	}
 
@@ -1229,7 +1229,7 @@ func (m model) View() string {
 			} else {
 				text = fmt.Sprintf("Mark %q as done?", task.Description)
 			}
-			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
+			view = popup.Overlay(view, popup.SuccessConfirmBox(text, width), width, height)
 		}
 	}
 

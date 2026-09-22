@@ -127,11 +127,22 @@ func ConfirmBox(text string, screenWidth int) string {
 // DangerConfirmBox draws a yes/no confirmation modal box like ConfirmBox,
 // but styled with the same red used by Error popups: for confirmations
 // whose consequences are especially destructive or hard to undo (e.g.
-// renaming a project onto an existing one, silently merging their tasks
-// together), so the elevated risk is visually obvious rather than looking
-// like a routine confirmation.
+// deleting a task, or renaming a project onto an existing one and silently
+// merging their tasks together), so the elevated risk is visually obvious
+// rather than looking like a routine confirmation.
 func DangerConfirmBox(text string, screenWidth int) string {
 	return renderBox("Confirm", Error.color(), "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
+}
+
+// successColor is the border/title color used by SuccessConfirmBox: the
+// same green used to signal a positive, non-destructive outcome.
+var successColor = lipgloss.Color("42") // green
+
+// SuccessConfirmBox draws a yes/no confirmation modal box like ConfirmBox,
+// but styled green: for confirmations whose action is positive/completing
+// rather than destructive (e.g. marking a task as done).
+func SuccessConfirmBox(text string, screenWidth int) string {
+	return renderBox("Confirm", successColor, "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
 }
 
 // renderBox is the shared layout used by Box and ConfirmBox: a bordered box
