@@ -7,6 +7,7 @@ package tasklist
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -97,13 +98,13 @@ type Model struct {
 // New constructs a Model over the given tasks. The list starts with the
 // first task (if any) selected.
 func New(tasks []taskwarrior.Task) Model {
-	return Model{tasks: tasks}
+	return Model{tasks: sortByUrgency(tasks)}
 }
 
 // SetTasks replaces the underlying task slice, clamping the cursor so it
 // remains within bounds.
 func (m Model) SetTasks(tasks []taskwarrior.Task) Model {
-	m.tasks = tasks
+	m.tasks = sortByUrgency(tasks)
 	if m.cursor >= len(tasks) {
 		m.cursor = len(tasks) - 1
 	}
@@ -111,6 +112,21 @@ func (m Model) SetTasks(tasks []taskwarrior.Task) Model {
 		m.cursor = 0
 	}
 	return m
+}
+
+// sortByUrgency returns a copy of tasks ordered by taskwarrior's computed
+// urgency field, highest first. Taskwarrior's default urgency coefficients
+// already weight priority heavily, so this alone gives an urgency-first,
+// priority-as-largest-factor ordering without lazytask needing its own
+// weighting logic. The sort is stable so ties (including all-zero urgency,
+// e.g. in tests that don't set it) keep their original relative order.
+func sortByUrgency(tasks []taskwarrior.Task) []taskwarrior.Task {
+	sorted := make([]taskwarrior.Task, len(tasks))
+	copy(sorted, tasks)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Urgency > sorted[j].Urgency
+	})
+	return sorted
 }
 
 // Selected returns the currently selected task and true, or a zero Task and

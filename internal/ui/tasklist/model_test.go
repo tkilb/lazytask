@@ -325,3 +325,31 @@ func TestRenderDataRow_ColorsOnlyPriorityCell(t *testing.T) {
 	coloredDescCell := lipgloss.NewStyle().Foreground(panel.PriorityHighColor).Render(plainDescCell)
 	assert.NotContains(t, row, coloredDescCell)
 }
+
+func TestSetTasks_SortsByUrgencyDescending(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "low urgency", Urgency: 1.2},
+		{ID: 2, Description: "high urgency", Urgency: 9.5},
+		{ID: 3, Description: "mid urgency", Urgency: 4.0},
+	}
+
+	m := New(nil).SetTasks(tasks)
+
+	got := make([]int, len(m.tasks))
+	for i, task := range m.tasks {
+		got[i] = task.ID
+	}
+	assert.Equal(t, []int{2, 3, 1}, got)
+}
+
+func TestNew_SortsByUrgencyDescending(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "low urgency", Urgency: 1.2},
+		{ID: 2, Description: "high urgency", Urgency: 9.5},
+	}
+
+	m := New(tasks)
+
+	assert.Equal(t, 2, m.tasks[0].ID)
+	assert.Equal(t, 1, m.tasks[1].ID)
+}

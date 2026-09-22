@@ -166,10 +166,15 @@ into the undo stack — open follow-up if needed.
   default), consistent with the existing hardcoded-color pattern in
   `internal/ui/panel` (see Phase 3 theming note — should stay overridable
   later, not hardcoded in a way that fights that future work).
-- **Priority sort mode** — add a selectable sort mode for the Tasks panel
-  that orders by `priority` (H > M > L > none), alongside whatever sort
-  mode(s) already exist. Needs a decision on the keybinding to cycle/select
-  sort mode before chunking.
+- **Urgency-based default sort** — always sort the Tasks panel by
+  taskwarrior's computed `urgency` field (descending), rather than
+  taskwarrior's default export/ID order. No selectable sort mode or
+  keybinding is needed: taskwarrior's urgency coefficients already weight
+  `priority` heavily by default, so this alone satisfies "sort by urgency,
+  with priority as the largest factor" without lazytask needing its own
+  weighting logic. (A prior draft of this requirement proposed a
+  selectable sort-mode toggle; that was a mistake and has been replaced
+  with this always-on behavior.)
 - **Quick set-priority keys** — from the Tasks panel (task focused), `h`/
   `m`/`l` set that task's priority directly to H/M/L respectively (via
   `task <id> modify priority:H|M|L`), no popup/confirmation needed. A
