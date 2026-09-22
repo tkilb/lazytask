@@ -41,6 +41,21 @@ func (f filterState) withProjectSelection(label string) filterState {
 	return f
 }
 
+// projectLabel returns the Projects-panel entry label (a project name, or
+// projects.NoneLabel/projects.AllLabel) corresponding to f's current
+// project filter. It is the inverse of withProjectSelection, used to keep
+// the Projects panel's visible cursor in sync with the shared filter (e.g.
+// after restoring a persisted filter from a previous session).
+func (f filterState) projectLabel() string {
+	if f.project == nil {
+		return projects.AllLabel
+	}
+	if *f.project == "" {
+		return projects.NoneLabel
+	}
+	return *f.project
+}
+
 // equal reports whether f and other select the same project filter. It
 // exists because filterState.project is a *string, so comparing
 // filterState values with == compares pointer identity rather than the

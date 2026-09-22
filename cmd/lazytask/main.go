@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/tkilb/lazytask/internal/config"
 	"github.com/tkilb/lazytask/internal/editbuffer"
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
@@ -319,6 +320,14 @@ type projectRenameErrMsg struct {
 	err error
 }
 
+// filterSaveErrMsg carries the error from a failed attempt to persist the
+// project filter to disk (see internal/config). It never blocks or
+// reverts the in-memory filter change — only the on-disk copy failed to
+// update.
+type filterSaveErrMsg struct {
+	err error
+}
+
 type model struct {
 	reader         TaskReader
 	adder          TaskAdder
@@ -351,8 +360,12 @@ type model struct {
 	knownProjects  map[string]struct{}
 }
 
+// initialModel constructs the app's starting state, including restoring
+// the project filter persisted by a previous session (see internal/config)
+// so the app reopens filtered the way the user left it.
 func initialModel() model {
 	client := taskwarrior.NewClient()
+	persisted := config.Load()
 	return model{
 		reader:        client,
 		adder:         client,
@@ -365,6 +378,7 @@ func initialModel() model {
 		add:           addform.New(),
 		projects:      projects.New(),
 		knownProjects: make(map[string]struct{}),
+		filter:        filterState{project: persisted.Project},
 	}
 }
 
@@ -470,6 +484,19 @@ func fetchProjects(reader TaskReader) tea.Cmd {
 			return projectsErrMsg{err: err}
 		}
 		return projectsLoadedMsg{projects: distinctProjects(tasks), counts: projectCounts(tasks)}
+	}
+}
+
+// saveFilter returns a tea.Cmd that persists f's project filter to disk
+// (see internal/config) so it's restored on the next app launch. On
+// failure it reports a filterSaveErrMsg rather than blocking or reverting
+// the (already-applied) in-memory filter change.
+func saveFilter(f filterState) tea.Cmd {
+	return func() tea.Msg {
+		if err := config.Save(config.State{Project: f.project}); err != nil {
+			return filterSaveErrMsg{err: err}
+		}
+		return nil
 	}
 }
 
@@ -787,7 +814,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				newFilter := m.filter.withProjectSelection(label)
 				if !newFilter.equal(m.filter) {
 					m.filter = newFilter
-					return m, tea.Batch(cmd, fetchTasks(m.reader, m.taskFilters()...))
+					return m, tea.Batch(cmd, fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
 				}
 			}
 			return m, cmd
@@ -849,7 +876,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case projectsLoadedMsg:
-		m.projects = m.projects.SetProjects(m.mergeKnownProjects(msg.projects)).SetCounts(msg.counts)
+		m.projects = m.projects.SetProjects(m.mergeKnownProjects(msg.projects)).SetCounts(msg.counts).SelectLabel(m.filter.projectLabel())
 		return m, nil
 	case projectsErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
@@ -894,8 +921,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filter = newFilter
 		m.renameFrom = ""
 		m.renameTo = ""
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), saveFilter(m.filter))
 	case projectRenameErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case filterSaveErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	}

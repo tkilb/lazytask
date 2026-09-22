@@ -90,6 +90,22 @@ func (m Model) SetCounts(counts Counts) Model {
 	return m
 }
 
+// SelectLabel moves the cursor to the given entry (a project name, or the
+// NoneLabel/AllLabel special entries) if it exists in the current entry
+// list, leaving the cursor unchanged otherwise (e.g. the label no longer
+// exists as a project). Used to keep the panel's visible selection in sync
+// with a filter applied/restored from elsewhere (e.g. main.go's shared
+// filterState, including a project filter persisted from a prior session).
+func (m Model) SelectLabel(label string) Model {
+	for i, entry := range m.entries() {
+		if entry == label {
+			m.cursor = i
+			break
+		}
+	}
+	return m
+}
+
 // entries returns the full selectable list: the AllLabel/NoneLabel special
 // entries pinned to the top, followed by the real project names.
 func (m Model) entries() []string {

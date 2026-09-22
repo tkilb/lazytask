@@ -114,3 +114,26 @@ func TestModel_SetProjectsClampsCursor(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "a", label)
 }
+
+func TestModel_SelectLabelMovesCursorToMatchingEntry(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"})
+
+	m = m.SelectLabel("work")
+	label, ok := m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "work", label)
+
+	m = m.SelectLabel(NoneLabel)
+	label, ok = m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, NoneLabel, label)
+}
+
+func TestModel_SelectLabelLeavesCursorUnchangedWhenLabelMissing(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"}).SelectLabel("work")
+
+	m = m.SelectLabel("no-such-project")
+	label, ok := m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "work", label, "cursor should stay put when the requested label isn't a current entry")
+}

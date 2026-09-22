@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tkilb/lazytask/internal/config"
 	"github.com/tkilb/lazytask/internal/editbuffer"
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
@@ -1699,6 +1700,29 @@ func TestModel_KnownProjectsStickyWithinSession(t *testing.T) {
 	assert.Equal(t, []string{"chores"}, m.projects.Projects(), "chores should remain visible for the rest of the session")
 }
 
+func TestModel_ProjectsLoadedMsg_SyncsPanelCursorToRestoredFilter(t *testing.T) {
+	// Regression test: a project filter restored from a previous session
+	// (see internal/config) should also move the Projects panel's visible
+	// cursor to match, not just the underlying task filter/query.
+	project := "work"
+	m := model{
+		reader:   &stubReader{},
+		list:     tasklist.New(nil),
+		projects: projects.New(),
+		filter:   filterState{project: &project},
+	}
+
+	newModel, _ := m.Update(projectsLoadedMsg{
+		projects: []string{"home", "work"},
+		counts:   projects.Counts{All: 2, ByProject: map[string]int{"home": 1, "work": 1}},
+	})
+	m = newModel.(model)
+
+	label, ok := m.projects.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "work", label)
+}
+
 func TestModel_MergeKnownProjects_UnionsAndSorts(t *testing.T) {
 	m := model{}
 	got := m.mergeKnownProjects([]string{"chores", "errands"})
@@ -1784,4 +1808,42 @@ func assertErrPopup(t *testing.T, m model, wantErr error) {
 	require.True(t, ok, "expected a queued popup")
 	assert.Equal(t, popup.Error, msg.Severity)
 	assert.Equal(t, wantErr.Error(), msg.Text)
+}
+
+// withTempStateFile redirects the internal/config state file to a fresh
+// per-test directory (via $TMPDIR), so tests never touch a real shared
+// /tmp/lazytask/state.json.
+func withTempStateFile(t *testing.T) {
+	t.Helper()
+	t.Setenv("TMPDIR", t.TempDir())
+}
+
+func TestInitialModel_RestoresPersistedProjectFilter(t *testing.T) {
+	withTempStateFile(t)
+
+	project := "work"
+	require.NoError(t, config.Save(config.State{Project: &project}))
+
+	m := initialModel()
+	require.NotNil(t, m.filter.project)
+	assert.Equal(t, "work", *m.filter.project)
+}
+
+func TestInitialModel_NoPersistedStateMeansNoFilter(t *testing.T) {
+	withTempStateFile(t)
+
+	m := initialModel()
+	assert.Nil(t, m.filter.project)
+}
+
+func TestSaveFilter_PersistsProjectSelection(t *testing.T) {
+	withTempStateFile(t)
+
+	project := "home"
+	msg := saveFilter(filterState{project: &project})()
+	assert.Nil(t, msg, "saveFilter should not emit a message on success")
+
+	got := config.Load()
+	require.NotNil(t, got.Project)
+	assert.Equal(t, "home", *got.Project)
 }
