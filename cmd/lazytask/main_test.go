@@ -1791,6 +1791,48 @@ func TestModel_ProjectsLoadedMsg_SyncsPanelCursorToRestoredFilter(t *testing.T) 
 	assert.Equal(t, "work", label)
 }
 
+func TestModel_ProjectsLoadedMsg_ClearsStaleRestoredFilter(t *testing.T) {
+	// Regression test: a project filter restored from a previous session
+	// (see internal/config) may point at a project that no longer has any
+	// pending tasks left (e.g. everything in it was completed/deleted
+	// since the last session). That project won't appear in an
+	// unfiltered pending-tasks query, so it's not a selectable Projects
+	// entry. Previously SelectLabel would silently leave the panel's
+	// cursor at its zero-value default (AllLabel, i.e. "(all)" shown as
+	// selected) while m.filter still held the stale project, so Tasks
+	// was fetched with a `project:<stale>` filter matching nothing —
+	// the list appeared empty despite "(all)" looking selected. The
+	// filter should be cleared to match what's actually shown.
+	project := "old-project"
+	reader := &stubReader{tasks: []taskwarrior.Task{
+		{ID: 1, Description: "keep going", Project: "home"},
+	}}
+	m := model{
+		reader:   reader,
+		list:     tasklist.New(nil),
+		projects: projects.New(),
+		filter:   filterState{project: &project},
+	}
+
+	newModel, cmd := m.Update(projectsLoadedMsg{
+		projects: []string{"home"},
+		counts:   projects.Counts{All: 1, ByProject: map[string]int{"home": 1}},
+	})
+	m = newModel.(model)
+
+	label, ok := m.projects.Selected()
+	require.True(t, ok)
+	assert.Equal(t, projects.AllLabel, label, "panel should visibly show (all) selected")
+	assert.Nil(t, m.filter.project, "stale project filter should be cleared to match the visible (all) selection")
+
+	require.NotNil(t, cmd)
+	msgs := runBatch(cmd)
+	tasksMsg, ok := findTasksLoaded(msgs)
+	require.True(t, ok, "clearing the stale filter should trigger a re-fetch of tasks")
+	assert.Equal(t, reader.tasks, tasksMsg.tasks)
+	assert.Equal(t, []string{"status:pending"}, reader.lastFilters, "re-fetch should use the cleared (unfiltered) project filter")
+}
+
 func TestModel_MergeKnownProjects_UnionsAndSorts(t *testing.T) {
 	m := model{}
 	got := m.mergeKnownProjects([]string{"chores", "errands"})

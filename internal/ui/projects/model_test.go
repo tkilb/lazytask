@@ -139,6 +139,16 @@ func TestModel_SelectLabelLeavesCursorUnchangedWhenLabelMissing(t *testing.T) {
 	assert.Equal(t, "work", label, "cursor should stay put when the requested label isn't a current entry")
 }
 
+func TestModel_HasLabel(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"})
+
+	assert.True(t, m.HasLabel(AllLabel))
+	assert.True(t, m.HasLabel(NoneLabel))
+	assert.True(t, m.HasLabel("home"))
+	assert.True(t, m.HasLabel("work"))
+	assert.False(t, m.HasLabel("no-such-project"), "a stale/removed project name should not be reported as a current entry")
+}
+
 func TestModel_View_ShowsPositionFooter(t *testing.T) {
 	m := New().SetProjects([]string{"home", "work"})
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})

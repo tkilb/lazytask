@@ -106,6 +106,21 @@ func (m Model) SelectLabel(label string) Model {
 	return m
 }
 
+// HasLabel reports whether label is a currently selectable entry (a known
+// project name, or the AllLabel/NoneLabel special entries). Callers use
+// this to detect a stale filter — e.g. a project filter restored from a
+// previous session whose project no longer has any pending tasks, and so
+// no longer appears in the panel — since SelectLabel silently leaves the
+// cursor unchanged in that case rather than reporting the mismatch.
+func (m Model) HasLabel(label string) bool {
+	for _, entry := range m.entries() {
+		if entry == label {
+			return true
+		}
+	}
+	return false
+}
+
 // entries returns the full selectable list: the AllLabel/NoneLabel special
 // entries pinned to the top, followed by the real project names.
 func (m Model) entries() []string {

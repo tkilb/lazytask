@@ -876,7 +876,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case projectsLoadedMsg:
-		m.projects = m.projects.SetProjects(m.mergeKnownProjects(msg.projects)).SetCounts(msg.counts).SelectLabel(m.filter.projectLabel())
+		m.projects = m.projects.SetProjects(m.mergeKnownProjects(msg.projects)).SetCounts(msg.counts)
+		label := m.filter.projectLabel()
+		if !m.projects.HasLabel(label) {
+			// The active filter (e.g. restored from a previous session's
+			// persisted state) refers to a project that no longer has any
+			// pending tasks, so it doesn't appear as a selectable entry
+			// here. SelectLabel would silently leave the panel's cursor
+			// wherever it already was (defaulting to AllLabel), which
+			// would show "(all)" selected while m.filter still applied
+			// the stale project filter to Tasks, making the list appear
+			// empty. Clear the filter so the visible selection and the
+			// actual task query agree.
+			m.filter = filterState{}
+			m.projects = m.projects.SelectLabel(projects.AllLabel)
+			return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+		}
+		m.projects = m.projects.SelectLabel(label)
 		return m, nil
 	case projectsErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
