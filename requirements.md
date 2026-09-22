@@ -129,11 +129,6 @@ Remaining:
 - **Tasks panel scrolling** — when the task list is taller than the panel's
   assigned height, it should scroll instead of overflowing unclipped
   (current behavior). Not yet scoped/chunked.
-- **Tags panel (key 4)** — same pattern as the Projects panel, built on the
-  existing filter-state infra: lists distinct tags, with an `*any*` entry
-  first (wrapped in `*`), selecting a tag sets a `+tag` filter, sourced from
-  the same unfiltered query as Projects. Pending sign-off/implementation
-  (deferred so the Details panel, Chunk 6, could be pulled forward first).
 
 ### Phase 3 — Customization
 
@@ -146,13 +141,6 @@ Remaining:
   the border when the Tasks panel itself was focused, since both used the
   same focus color) — not yet scoped/chunked; needs a decision on the YAML
   schema (named palette vs. per-role color keys) before chunking.
-- **Configurable keymaps via YAML** — user-overridable key bindings for
-  existing actions (list nav, add/done/delete/edit), loaded via the existing
-  YAML config plumbing. Needs a decision on config file location/precedence
-  before chunking.
-- **Custom user-defined tasks/actions via YAML** — let users define their
-  own quick-actions (e.g. canned `task` command templates) in config. Needs
-  a decision on the templating/placeholder syntax before chunking.
 
 ### Phase 4 — Data Safety & Sync
 
@@ -163,6 +151,187 @@ Remaining:
   configured outside lazytask can be triggered/monitored from the TUI. Needs
   a decision on how much sync-config setup (if any) lazytask should own vs.
   assume is already configured via taskwarrior's own `sync` settings.
+
+### Phase 5 — Priority logic
+
+- **Priority-based coloring** — color-code each row in the Tasks panel by
+  its `priority` field (e.g. H=red, M=yellow, L=default/unstyled, none=
+  default), consistent with the existing hardcoded-color pattern in
+  `internal/ui/panel` (see Phase 3 theming note — should stay overridable
+  later, not hardcoded in a way that fights that future work).
+- **Priority sort mode** — add a selectable sort mode for the Tasks panel
+  that orders by `priority` (H > M > L > none), alongside whatever sort
+  mode(s) already exist. Needs a decision on the keybinding to cycle/select
+  sort mode before chunking.
+- **Quick set-priority keys** — from the Tasks panel (task focused), `h`/
+  `m`/`l` set that task's priority directly to H/M/L respectively (via
+  `task <id> modify priority:H|M|L`), no popup/confirmation needed. A
+  fourth key/action to clear priority back to none is still open (not
+  specified — needs a decision, e.g. reusing one of h/m/l as a toggle-off
+  if already at that value, vs. a separate key).
+- **Urgency-based manual reordering (`Ctrl+j` / `Ctrl+k`)** — within a
+  task's current priority lane (H, M, or L), let the user "nudge" a task
+  up/down relative to its neighbors to establish a custom order, without
+  changing its priority band.
+  - **Open design problem, not yet solved:** taskwarrior's `urgency` is a
+    **computed, read-only value** (derived from due date, age, tags,
+    project, etc. via coefficients) — it is not a stored field and cannot
+    be directly set via `task modify urgency:...`. So "mutate the urgency
+    score" as stated isn't literally achievable against taskwarrior as-is.
+    Options to actually deliver the described "custom order within a
+    priority lane" behavior, to be decided before chunking:
+    1. Introduce a lazytask-owned UDA (e.g. `priority_ord` or similar,
+       registered via taskwarrior's UDA config) as a manual sort-key
+       nudged by `Ctrl+j`/`Ctrl+k`, used as a secondary sort key after
+       priority — real `urgency` is left alone, purely computed as normal.
+    2. Nudge one of taskwarrior's real urgency inputs that's cheap to
+       toggle per-task (e.g. a lazytask-managed tag like `+ord1`/`+ord2`
+       with configured urgency coefficients) so it does actually move the
+       real urgency score, at the cost of needing coefficient config setup.
+    3. Purely a lazytask-side, in-memory/local sort override (not synced
+       to taskwarrior at all), simplest but lost if sorting is recomputed
+       from a fresh `task export`.
+    - Leaning toward option 1 (dedicated UDA) as least surprising and most
+      durable, but needs explicit sign-off since it means lazytask starts
+      writing/depending on a UDA it defines, which is new territory.
+  - Also needs a decision on whether `Ctrl+j`/`Ctrl+k` swap with the
+    adjacent task or nudge by a fixed increment (matters once ties/gaps in
+    the sort key accumulate).
+- **Urgency visibility** — show taskwarrior's real computed `urgency` score
+  (e.g. as a column/detail-panel field) so the user can see it alongside
+  priority, and optionally allow sorting by it as a separate sort mode from
+  the H/M/L priority sort above. Needs a decision on where it's displayed
+  (list column vs. Details panel only).
+
+### Phase 6 - Advanced Wizards
+
+- Make an new component that will allow the user to quickly pick a due date.
+  The idea is we want a cord like '2d' for two days from now and '1w' for on week from now.
+  '2b' will be two business days from now, assume Sat and Sun are not business days.
+- 'p' from the edit panel will open a popup for a quick project picker for filtering
+- 't' from the edit panel will open a popup for a quick tag picker for filtering
+- 'P' from the edit panel will open a popup for project re-assign, allow for existing project to be selected from a list
+  or a new one to be keyed in
+  or a new one to be keyed in
+- 'D' will make use of the date component for the selected task. cord shortcuts may be used for a quick date or have the option for a custom date key in
+- Add will now have additional fields for project, tags, due date an priority.
+
+### Phase 7 — Tags
+
+- **Tags panel (key 4)** — same pattern as the Projects panel, built on the
+  existing filter-state infra: lists distinct tags, with an `*any*` entry
+  first (wrapped in `*`), selecting a tag sets a `+tag` filter, sourced from
+  the same unfiltered query as Projects. Pending sign-off/implementation
+- 'T' from the edit panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
+  If keyed in, there will be a comma delimited list and the mode will be replacement instead.
+
+### Phase 8 — Low Priority
+
+- **Remote task data** - Allow for a remote mode an local mode for tasks state.
+  Approach: use taskwarrior/TaskChampion's native **git sync backend**
+  (`sync.git.local_path` / `sync.git.branch` / `sync.git.remote` /
+  `sync.encryption_secret`, confirmed supported as of `task` 3.5.0, PR #4111)
+  rather than raw file sync or a new backend. Task payloads are client-side
+  encrypted before being committed, so the remote git host never sees
+  plaintext task data. The intended remote is a **private** git repo, but
+  encryption + a history purge (below) are extra defense-in-depth layers in
+  case that repo is ever exposed.
+  - **History retention/purge** — TaskChampion's built-in version-file
+    cleanup only prunes already-snapshotted files and defaults to a
+    hardcoded 180-day retention (not configurable via `task config`); it
+    also does **not** rewrite git history, so old encrypted blobs remain
+    recoverable from git history/objects until history is rewritten and
+    garbage-collected. To actually purge data older than **one week**,
+    lazytask will need its own maintenance routine (e.g. periodic
+    history-squash/rewrite + force-push + `git gc --prune=now` on the sync
+    repo) run on a schedule, since this isn't achievable via existing
+    taskwarrior config alone. Needs a decision on how/when this maintenance
+    runs (triggered from lazytask vs. an external cron) before chunking.
+
+#### Phase 8 design notes — git history purge routine
+
+Investigated directly against TaskChampion's `src/server/gitsync/mod.rs` (as
+of the commit that added git-sync support, `task` 3.5.0 / PR #4111), for the
+benefit of whichever agent chunks this later. Not implemented — design only.
+
+**How the git-sync backend actually stores data:**
+
+- Each sync writes one immutable file `v-{parent_uuid}-{child_uuid}`
+  containing an encrypted history segment. `snapshot` and `meta` files get
+  overwritten in place as newer snapshots/version pointers are produced.
+- TaskChampion's own cleanup (`cleanup()`) only `git rm`s version files that
+  are (a) already covered by a snapshot and (b) whose last-touching commit
+  is older than a **hardcoded 180-day `version_retention` constant** — this
+  is not exposed via any `task config sync.git.*` key.
+- Critically, that cleanup only stages a `git rm` + commit; it does **not**
+  rewrite git history. The deleted blob content is still present in older
+  commit objects until history is rewritten and garbage-collected.
+- TaskChampion never reads git commit _history_ for correctness of syncing
+  — the only historical git operation is `git log -1 --format=%ct -- <file>`
+  to compute a single file's age for that cleanup check. Otherwise it only
+  cares about working-tree state at `HEAD`. This means a full history
+  rewrite is safe from TaskChampion's point of view as long as the final
+  `HEAD` tree (meta, snapshot, surviving version files) is preserved
+  byte-for-byte.
+
+**Proposed purge routine** (target retention: ~7 days of git history, run on
+a schedule):
+
+1. Take a lock/mutex on the sync repo directory so this never races with an
+   in-flight `task sync`.
+2. `git fetch` + fast-forward to the true remote tip first — never rewrite
+   from a stale local view of the repo.
+3. Squash rather than selectively rewrite: `git checkout --orphan
+purge-tmp && git add -A && git commit` to create one fresh, parentless
+   commit holding exactly the current `meta`/`snapshot`/surviving version
+   files. (A full squash is simpler and more robust than trying to
+   selectively drop only commits older than the cutoff, and is safe per the
+   point above.)
+4. Rename `purge-tmp` over the configured `sync.git.branch`, then `git push
+--force` to `sync.git.remote`.
+5. Locally: `git reflog expire --expire=now --all && git gc --prune=now
+--aggressive` to actually drop the now-unreachable objects on disk.
+6. On push rejection (a `task sync` landed mid-purge), abort and retry from
+   step 2 — do not reuse TaskChampion's own pull-and-reset retry logic,
+   which is designed for appending versions, not rewriting history.
+
+**Known side effects / open questions for the chunking agent (not decided
+here):**
+
+- Squashing resets TaskChampion's own internal per-file "age" tracking
+  (since it's derived from `git log`), effectively restarting its 180-day
+  cleanup timer. Harmless — our external 7-day purge supersedes it — but
+  should be documented so it isn't mistaken for a bug later.
+- **Every other replica/device syncing against this repo must also discard
+  its old local clone/history after a purge**, or it can silently
+  resurrect "deleted" history on its next push. Needs a coordination story
+  (e.g. detect a rewritten root commit and force re-clone) before this is
+  safe to ship for multi-device use.
+- **Force-push + local `git gc` is mitigation, not a guarantee of remote
+  deletion.** Hosts such as GitHub commonly retain unreachable objects for
+  a grace window (historically up to ~90 days) before their own background
+  GC reclaims them, and any existing fork/mirror/backup of the repo keeps
+  full history regardless of what this routine does. This must be
+  documented to the user as defense-in-depth on top of "keep the repo
+  private," not an absolute guarantee.
+- Trigger mechanism still needs a decision: lazytask-internal
+  timer/hook vs. a separate external cron script the user manages.
+  Leaning toward starting with an external script, since a
+  history-rewriting operation is riskier to run inside the TUI process's
+  own lifecycle.
+- Retention window (7 days) should probably be YAML-configurable rather
+  than hardcoded, consistent with the rest of Phase 8's config-driven
+  items.
+
+### Phase 9 — Low Priority
+
+- **Configurable keymaps via YAML** — user-overridable key bindings for
+  existing actions (list nav, add/done/delete/edit), loaded via the existing
+  YAML config plumbing. Needs a decision on config file location/precedence
+  before chunking.
+- **Custom user-defined tasks/actions via YAML** — let users define their
+  own quick-actions (e.g. canned `task` command templates) in config. Needs
+  a decision on the templating/placeholder syntax before chunking.
 
 ## 8. Open Questions / Assumptions Log
 
