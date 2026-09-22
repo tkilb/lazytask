@@ -207,6 +207,14 @@ begins, since scope/design may shift by the time we get there.
      Projects panel — so counts went stale after any of those actions
      (most visibly as a `(0)`-count project still showing `(1)`). All four
      now refresh both the Tasks list and Projects panel.
+- ~~**Global add key + project-filter auto-assign on new tasks**~~ —
+  **DONE.** Ad-hoc feature (direct instruction, not from the Section 7
+  backlog). `a` (add task) is now a global binding rather than
+  Tasks-panel-local, so it opens the add-task form from any panel focus.
+  Submitting the form auto-assigns the new task to whichever real project
+  is currently selected in the Projects panel filter (via a
+  `project:<name>` extra arg to `TaskAdder.Add`); the `(all)`/`(none)`
+  special filter entries are excluded, since neither is a real project.
 - **General panel layout** — UX discussed and scoped below into 6 chunks,
   based on a since-removed `layout.md` design note. This covers the general
   layout, the filter/search panel, and the project & tag side panels as a

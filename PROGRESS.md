@@ -143,6 +143,20 @@
     `(N)` could be left showing a stale non-zero count; all four actions
     now refresh both panels.
 
+- ✅ **Global add key + project-filter auto-assign on new tasks — DONE.**
+  Ad-hoc feature (direct instruction, not from the Section 7 backlog):
+  - `a` (open the add-task form) moved from the Tasks-panel-local
+    keybinding tier to the global tier in `cmd/lazytask/main.go`, so it now
+    opens from any panel focus, not just Tasks (matching the status-bar
+    hint, which moved from `tasksLocalBindings` to `globalBindings`).
+  - Submitting the add form now auto-assigns the task to whichever real
+    project is currently selected via the Projects panel filter
+    (`filterState.project`), passed as a `project:<name>` extra arg to
+    `TaskAdder.Add`. The `(all)` (nil) and `(none)` (empty-string) special
+    filter entries are excluded — only an actual project name is applied.
+    `addTask` gained a variadic `extraArgs ...string` parameter to carry
+    this through.
+
 ## Up Next
 
 Next work comes from requirements.md §7 "Future Phases":

@@ -42,10 +42,12 @@ func (s *stubReader) Export(ctx context.Context, filters ...string) ([]taskwarri
 type stubAdder struct {
 	err          error
 	descriptions []string
+	extraArgs    [][]string
 }
 
 func (s *stubAdder) Add(ctx context.Context, description string, extraArgs ...string) (int, error) {
 	s.descriptions = append(s.descriptions, description)
+	s.extraArgs = append(s.extraArgs, extraArgs)
 	if s.err != nil {
 		return 0, s.err
 	}
@@ -207,10 +209,12 @@ func TestModelUpdate_RKeyIsNoOpForNow(t *testing.T) {
 }
 
 // TestModelUpdate_TasksLocalKeysRequireTasksFocus verifies the new
-// global/local keybinding split: Tasks-panel-only actions (add/done/delete/
-// edit/tab-cycle) must not fire while some other panel has focus.
+// global/local keybinding split: Tasks-panel-only actions (done/delete/
+// edit/tab-cycle) must not fire while some other panel has focus. "a" (add)
+// is global (see TestModelUpdate_GlobalKeysWorkFromAnyFocus) and so is
+// deliberately excluded here.
 func TestModelUpdate_TasksLocalKeysRequireTasksFocus(t *testing.T) {
-	for _, key := range []string{"a", "d", "x", "e", "[", "]"} {
+	for _, key := range []string{"d", "x", "e", "[", "]"} {
 		t.Run(key, func(t *testing.T) {
 			m := model{
 				list:  tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
@@ -227,7 +231,8 @@ func TestModelUpdate_TasksLocalKeysRequireTasksFocus(t *testing.T) {
 }
 
 // TestModelUpdate_GlobalKeysWorkFromAnyFocus verifies global bindings
-// (quit, panel-focus keys) still fire regardless of which panel has focus.
+// (quit, panel-focus keys, add) still fire regardless of which panel has
+// focus.
 func TestModelUpdate_GlobalKeysWorkFromAnyFocus(t *testing.T) {
 	m := model{list: tasklist.New(nil), focus: focusStatus}
 
@@ -236,6 +241,20 @@ func TestModelUpdate_GlobalKeysWorkFromAnyFocus(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, mm.quitting)
 	assert.NotNil(t, cmd)
+}
+
+// TestModelUpdate_AddIsGlobal verifies "a" opens the add-task form from any
+// panel focus, not just Tasks.
+func TestModelUpdate_AddIsGlobal(t *testing.T) {
+	for _, focus := range []panelFocus{focusStatus, focusTasks, focusProjects, focusTags, focusDetails} {
+		t.Run(panelTitle(focus), func(t *testing.T) {
+			m := model{list: tasklist.New(nil), add: addform.New(), focus: focus}
+			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+			mm, ok := newModel.(model)
+			assert.True(t, ok)
+			assert.True(t, mm.adding)
+		})
+	}
 }
 
 func TestModelUpdate_Quit(t *testing.T) {
@@ -288,7 +307,8 @@ func TestModelView(t *testing.T) {
 		m := model{list: tasklist.New(nil), focus: focusStatus}
 		view := m.View()
 		assert.Contains(t, view, "quit")
-		for _, notWant := range []string{"add", "done", "delete", "edit", "refresh"} {
+		assert.Contains(t, view, "add")
+		for _, notWant := range []string{"done", "delete", "edit", "refresh"} {
 			assert.NotContains(t, view, notWant)
 		}
 	})
@@ -486,6 +506,68 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
 	assert.Equal(t, 2, reader.calls) // one for tasks, one for the projects panel
+}
+
+// TestModelUpdate_AddingAutoAssignsSelectedProjectFilter verifies that
+// submitting the add form while a real project filter is selected (via the
+// Projects panel) passes that project along as a `project:` argument, so
+// new tasks are automatically scoped to the currently-filtered project.
+func TestModelUpdate_AddingAutoAssignsSelectedProjectFilter(t *testing.T) {
+	t.Run("real project filter is applied", func(t *testing.T) {
+		adder := &stubAdder{}
+		project := "chores"
+		m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true, filter: filterState{project: &project}}
+		m.add = m.add.Focus()
+		for _, r := range "Mow lawn" {
+			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(model)
+		}
+
+		newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		_ = newModel.(model)
+		require.NotNil(t, cmd)
+		cmd()
+
+		require.Len(t, adder.extraArgs, 1)
+		assert.Equal(t, []string{"project:chores"}, adder.extraArgs[0])
+	})
+
+	t.Run("no filter (all) adds no project arg", func(t *testing.T) {
+		adder := &stubAdder{}
+		m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true}
+		m.add = m.add.Focus()
+		for _, r := range "Buy milk" {
+			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(model)
+		}
+
+		newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		_ = newModel.(model)
+		require.NotNil(t, cmd)
+		cmd()
+
+		require.Len(t, adder.extraArgs, 1)
+		assert.Empty(t, adder.extraArgs[0])
+	})
+
+	t.Run("(none) filter adds no project arg", func(t *testing.T) {
+		adder := &stubAdder{}
+		none := ""
+		m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true, filter: filterState{project: &none}}
+		m.add = m.add.Focus()
+		for _, r := range "Buy milk" {
+			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(model)
+		}
+
+		newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		_ = newModel.(model)
+		require.NotNil(t, cmd)
+		cmd()
+
+		require.Len(t, adder.extraArgs, 1)
+		assert.Empty(t, adder.extraArgs[0])
+	})
 }
 
 func TestModelUpdate_AddingSubmitEmptyDescriptionShowsWarningPopup(t *testing.T) {

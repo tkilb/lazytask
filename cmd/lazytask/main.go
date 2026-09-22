@@ -114,6 +114,7 @@ const (
 // data (tasks, projects, tags, ...).
 var globalBindings = []statusbar.Binding{
 	{Key: "0-4/tab", Label: "panels"},
+	{Key: "a", Label: "add"},
 	{Key: "q", Label: "quit"},
 }
 
@@ -122,12 +123,12 @@ var globalBindings = []statusbar.Binding{
 // reflects exactly which keys will do something right now. "r" and the
 // Deleted-tab-specific "x" (purge) label are only meaningful on certain
 // tabs, so they're added/overridden separately by statusBindings rather
-// than listed here.
+// than listed here. "a" (add) moved to globalBindings since it's no longer
+// Tasks-panel-local.
 var tasksLocalBindings = []statusbar.Binding{
 	{Key: "↑/k", Label: "up"},
 	{Key: "↓/j", Label: "down"},
 	{Key: "[/]", Label: "tabs"},
-	{Key: "a", Label: "add"},
 	{Key: "d", Label: "done"},
 	{Key: "x", Label: "delete"},
 	{Key: "e", Label: "edit"},
@@ -534,10 +535,11 @@ func distinctProjects(tasks []taskwarrior.Task) []string {
 	return names
 }
 
-// addTask returns a tea.Cmd that creates a new task via adder.
-func addTask(adder TaskAdder, description string) tea.Cmd {
+// addTask returns a tea.Cmd that creates a new task via adder, passing
+// along any extra `task add` argument fragments (e.g. "project:chores").
+func addTask(adder TaskAdder, description string, extraArgs ...string) tea.Cmd {
 	return func() tea.Msg {
-		id, err := adder.Add(context.Background(), description)
+		id, err := adder.Add(context.Background(), description, extraArgs...)
 		if err != nil {
 			return taskAddErrMsg{err: err}
 		}
@@ -759,6 +761,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			m = m.setFocus(prevFocus(m.focus))
 			return m, nil
+		case "a":
+			m.adding = true
+			m.add = m.add.Focus()
+			return m, m.add.Init()
 		}
 		// Projects-panel-local: navigation (up/down/j/k) is applied
 		// directly here, rather than being delegated to the bottom
@@ -798,10 +804,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "]":
 			m.list = m.list.NextStatus()
 			return m, fetchTasks(m.reader, m.taskFilters()...)
-		case "a":
-			m.adding = true
-			m.add = m.add.Focus()
-			return m, m.add.Init()
 		case "d":
 			// A Done task is already done; there's nothing to confirm.
 			if m.list.Status() == tasklist.TabDone {
@@ -1035,7 +1037,18 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.adding = false
 			m.add = m.add.Blur()
-			return m, addTask(m.adder, description)
+			var extraArgs []string
+			// Auto-assign the task to whatever real project is currently
+			// selected via the Projects panel filter, so "a" from any
+			// panel creates tasks already scoped to that project. Only a
+			// non-nil, non-empty filter.project is a real project name:
+			// nil means "(all)" (no filter) and "" means "(none)"
+			// (explicitly project-less), neither of which should be
+			// applied to the new task.
+			if m.filter.project != nil && *m.filter.project != "" {
+				extraArgs = append(extraArgs, "project:"+*m.filter.project)
+			}
+			return m, addTask(m.adder, description, extraArgs...)
 		}
 	}
 
