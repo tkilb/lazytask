@@ -123,6 +123,22 @@ func (s *stubImporter) Import(ctx context.Context, data []byte) error {
 	return s.err
 }
 
+// stubPrioritizer is a test double for TaskPrioritizer, avoiding any real
+// `task` process invocation.
+type stubPrioritizer struct {
+	err        error
+	ids        []string
+	priorities []string
+	call       int
+}
+
+func (s *stubPrioritizer) SetPriority(ctx context.Context, id, priority string) error {
+	s.call++
+	s.ids = append(s.ids, id)
+	s.priorities = append(s.priorities, priority)
+	return s.err
+}
+
 // runBatch executes cmd, and if it returns a tea.BatchMsg (e.g. from
 // refreshes that now fetch tasks and projects concurrently via
 // tea.Batch), executes each of the batched sub-commands as well,
@@ -1296,6 +1312,61 @@ func TestModelUpdate_TaskEditErrMsgSetsErr(t *testing.T) {
 	wantErr := errors.New("edit failed")
 
 	newModel, cmd := m.Update(taskEditErrMsg{err: wantErr})
+	m = newModel.(model)
+	assertErrPopup(t, m, wantErr)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_HMLKeysSetPriority(t *testing.T) {
+	for key, want := range map[string]string{"h": "H", "m": "M", "l": "L"} {
+		t.Run(key, func(t *testing.T) {
+			prioritizer := &stubPrioritizer{}
+			m := model{
+				prioritizer: prioritizer,
+				list:        tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}),
+			}
+
+			newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+			m = newModel.(model)
+			require.NotNil(t, cmd)
+
+			msg := cmd()
+			priMsg, ok := msg.(taskPrioritySetMsg)
+			assert.True(t, ok)
+			assert.Equal(t, 1, priMsg.id)
+			assert.Equal(t, []string{"abc-123"}, prioritizer.ids)
+			assert.Equal(t, []string{want}, prioritizer.priorities)
+		})
+	}
+}
+
+func TestModelUpdate_HMLKeysNoSelectionNoOp(t *testing.T) {
+	m := model{prioritizer: &stubPrioritizer{}, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	m = newModel.(model)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_TaskPrioritySetMsgTriggersRefreshAndKeepsSelection(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
+	m := model{reader: reader, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(taskPrioritySetMsg{id: 1})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, 1, m.pendingFocusID)
+
+	loaded, ok := findTasksLoaded(runBatch(cmd))
+	assert.True(t, ok)
+	assert.Equal(t, reader.tasks, loaded.tasks)
+}
+
+func TestModelUpdate_TaskPriorityErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("set priority failed")
+
+	newModel, cmd := m.Update(taskPriorityErrMsg{err: wantErr})
 	m = newModel.(model)
 	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)

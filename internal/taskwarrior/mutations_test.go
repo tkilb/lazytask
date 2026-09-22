@@ -3,6 +3,7 @@ package taskwarrior
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +72,13 @@ func TestClient_Restore_EmptyID(t *testing.T) {
 func TestClient_Purge_EmptyID(t *testing.T) {
 	c := NewClient()
 	err := c.Purge(context.Background(), "  ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestClient_SetPriority_EmptyID(t *testing.T) {
+	c := NewClient()
+	err := c.SetPriority(context.Background(), "  ", "H")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not be empty")
 }
@@ -190,4 +198,17 @@ func TestClient_Mutations_Integration(t *testing.T) {
 	afterPurge, err := client.Export(ctx, "status:deleted")
 	require.NoError(t, err)
 	assert.Empty(t, afterPurge)
+
+	// 6. Add one more task and confirm SetPriority updates its priority
+	// field.
+	prioID, err := client.Add(ctx, "Renew passport")
+	require.NoError(t, err)
+
+	err = client.SetPriority(ctx, fmt.Sprintf("%d", prioID), "H")
+	require.NoError(t, err)
+
+	prioritized, err := client.Export(ctx, "status:pending")
+	require.NoError(t, err)
+	require.Len(t, prioritized, 1)
+	assert.Equal(t, "H", prioritized[0].Priority)
 }

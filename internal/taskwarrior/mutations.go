@@ -18,6 +18,7 @@ type TaskMutator interface {
 	Restore(ctx context.Context, id string) error
 	Purge(ctx context.Context, id string) error
 	Import(ctx context.Context, data []byte) error
+	SetPriority(ctx context.Context, id, priority string) error
 }
 
 // createdTaskRE matches Taskwarrior's "Created task <id>." confirmation line.
@@ -109,6 +110,16 @@ func (c *Client) Purge(ctx context.Context, id string) error {
 		return fmt.Errorf("id must not be empty")
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "purge")
+	return err
+}
+
+// SetPriority sets the priority (H/M/L) of the task identified by id (a
+// Taskwarrior ID or UUID).
+func (c *Client) SetPriority(ctx context.Context, id, priority string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "priority:"+priority)
 	return err
 }
 

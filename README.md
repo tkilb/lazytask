@@ -22,7 +22,7 @@ The screen is split into a two-column grid, cycled with number keys `0`-`4` or `
 | Key | Panel | Description |
 |-----|-------|-------------|
 | `1` | **Status** | Summary line (`#id [status] P:project T:tags`) for the task selected in Tasks. |
-| `2` | **Tasks** | The task list, with `Todo`/`Done`/`Deleted` tabs (cycle with `[`/`]`). |
+| `2` | **Tasks** | The task list, with `Todo`/`Done`/`Deleted` tabs (cycle with `[`/`]`). Sorted by taskwarrior's computed urgency, highest first. The Priority cell is colored (H = red, M = yellow, L = blue). |
 | `3` | **Projects** | Distinct project names, with `(N)` pending-task counts and `(all)`/`(none)` entries; moving the cursor filters Tasks immediately. |
 | `4` | **Tags** | *(planned — not yet implemented)* |
 | `0` | **Details** | Full read-only detail view (ID, UUID, description, status, project, tags, priority, due, urgency, entry/modified/end) for the selected task. |
@@ -37,6 +37,8 @@ The screen is split into a two-column grid, cycled with number keys `0`-`4` or `
 | `0`-`4` | Focus a panel |
 | `Tab` / `Shift+Tab` | Cycle panel focus |
 | `a` | Open the add-task form (new task is auto-assigned to the active project filter, if any) |
+| `u` | Undo the last undoable action (done/delete/restore/purge/priority change) |
+| `ctrl+r` | Redo the last undone action |
 
 **Tasks panel** (when focused):
 
@@ -48,6 +50,7 @@ The screen is split into a two-column grid, cycled with number keys `0`-`4` or `
 | `r` | Reopen/restore a Done or Deleted task back to Todo (confirm) |
 | `x` | Delete a task (Todo/Done) or permanently purge it (Deleted) (confirm) |
 | `e` | Edit task in `$EDITOR` |
+| `h` / `m` / `l` | Set the selected task's priority to High / Medium / Low |
 
 **Projects panel** (when focused):
 

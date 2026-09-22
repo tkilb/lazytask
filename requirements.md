@@ -209,12 +209,6 @@ into the undo stack — open follow-up if needed.
   - Also needs a decision on whether `Ctrl+j`/`Ctrl+k` swap with the
     adjacent task or nudge by a fixed increment (matters once ties/gaps in
     the sort key accumulate).
-- **Urgency visibility** — show taskwarrior's real computed `urgency` score
-  (e.g. as a column/detail-panel field) so the user can see it alongside
-  priority, and optionally allow sorting by it as a separate sort mode from
-  the H/M/L priority sort above. Needs a decision on where it's displayed
-  (list column vs. Details panel only).
-
 ### Phase 6 - Advanced Wizards
 
 - Make an new component that will allow the user to quickly pick a due date.

@@ -136,6 +136,7 @@ var tasksLocalBindings = []statusbar.Binding{
 	{Key: "d", Label: "done"},
 	{Key: "x", Label: "delete"},
 	{Key: "e", Label: "edit"},
+	{Key: "h/m/l", Label: "priority"},
 }
 
 // projectsLocalBindings are only active while the Projects panel has
@@ -234,6 +235,13 @@ type TaskImporter interface {
 	Import(ctx context.Context, data []byte) error
 }
 
+// TaskPrioritizer is the subset of the taskwarrior client needed to set a
+// task's priority, so it can be stubbed out in tests without shelling out
+// to the real `task` binary.
+type TaskPrioritizer interface {
+	SetPriority(ctx context.Context, id, priority string) error
+}
+
 // tasksLoadedMsg carries the result of a successful task fetch.
 type tasksLoadedMsg struct {
 	tasks []taskwarrior.Task
@@ -315,6 +323,20 @@ type taskPurgeErrMsg struct {
 	err error
 }
 
+// taskPrioritySetMsg carries the result of a successful SetPriority call,
+// plus the undo.Action that reverses it (see setPriorityTask) and the id of
+// the task whose priority changed, so the cursor can be kept on it after
+// the following refresh re-sorts the list by urgency.
+type taskPrioritySetMsg struct {
+	id     int
+	action undo.Action
+}
+
+// taskPriorityErrMsg carries the error from a failed SetPriority call.
+type taskPriorityErrMsg struct {
+	err error
+}
+
 // undoAppliedMsg carries the description of the undo.Action whose Undo
 // func just ran successfully via the "u" key.
 type undoAppliedMsg struct {
@@ -378,6 +400,7 @@ type model struct {
 	restorer       TaskRestorer
 	purger         TaskPurger
 	importer       TaskImporter
+	prioritizer    TaskPrioritizer
 	list           tasklist.Model
 	add            addform.Model
 	adding         bool
@@ -417,6 +440,7 @@ func initialModel() model {
 		restorer:      client,
 		purger:        client,
 		importer:      client,
+		prioritizer:   client,
 		list:          tasklist.New(nil).SetFocused(true),
 		add:           addform.New(),
 		projects:      projects.New(),
@@ -735,6 +759,28 @@ func purgeTask(purger TaskPurger, importer TaskImporter, task taskwarrior.Task) 
 	}
 }
 
+// setPriorityTask returns a tea.Cmd that sets task's priority to priority
+// via prioritizer, returning an undo.Action that reverses it back to the
+// task's prior priority.
+func setPriorityTask(prioritizer TaskPrioritizer, task taskwarrior.Task, priority string) tea.Cmd {
+	return func() tea.Msg {
+		id := taskID(task)
+		prior := task.Priority
+		if err := prioritizer.SetPriority(context.Background(), id, priority); err != nil {
+			return taskPriorityErrMsg{err: err}
+		}
+		return taskPrioritySetMsg{id: task.ID, action: undo.Action{
+			Description: fmt.Sprintf("set task %s priority to %s", id, priority),
+			Undo: func() error {
+				return prioritizer.SetPriority(context.Background(), id, prior)
+			},
+			Redo: func() error {
+				return prioritizer.SetPriority(context.Background(), id, priority)
+			},
+		}}
+	}
+}
+
 // runUndo returns a tea.Cmd that invokes a previously-pushed undo.Action's
 // Undo func (see the "u" key binding in Update).
 func runUndo(a undo.Action) tea.Cmd {
@@ -1002,6 +1048,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, editTask(m.importer, task)
 			}
 			return m, nil
+		case "h", "m", "l":
+			if task, ok := m.list.Selected(); ok {
+				return m, setPriorityTask(m.prioritizer, task, strings.ToUpper(msg.String()))
+			}
+			return m, nil
 		}
 	case tasksLoadedMsg:
 		m.list = m.list.SetTasks(msg.tasks)
@@ -1064,6 +1115,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskPurgeErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskPrioritySetMsg:
+		m.undo.Push(msg.action)
+		m.pendingFocusID = msg.id
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+	case taskPriorityErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case undoAppliedMsg:
