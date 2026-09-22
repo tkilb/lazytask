@@ -29,6 +29,14 @@ const (
 	// its selectedLineBgColor, reused here for the same row-highlight
 	// role in list panels).
 	paletteBlue = lipgloss.Color("4")
+	// paletteRed is used for high-priority row coloring.
+	paletteRed = lipgloss.Color("1")
+	// paletteYellow is used for medium-priority row coloring.
+	paletteYellow = lipgloss.Color("3")
+	// paletteCyan is used for low-priority row coloring, kept distinct
+	// from paletteBlue so low-priority rows don't visually blend with
+	// the row-selection highlight / active-tab color.
+	paletteCyan = lipgloss.Color("6")
 )
 
 const (
@@ -54,6 +62,22 @@ const (
 	// title, deliberately independent of panel focus so it doesn't compete
 	// with activeTabColor.
 	inactiveTabColor = paletteDefault
+
+	// PriorityHighColor is the row foreground color for tasks with
+	// priority "H", exported so list-owning packages can color rows by
+	// task priority without picking their own colors.
+	PriorityHighColor = paletteRed
+	// PriorityMediumColor is the row foreground color for tasks with
+	// priority "M".
+	PriorityMediumColor = paletteYellow
+	// PriorityLowColor is the row foreground color for tasks with
+	// priority "L". Uses cyan rather than blue so it doesn't visually
+	// blend with SelectedRowBackground/activeTabColor, which are blue.
+	PriorityLowColor = paletteCyan
+	// PriorityLowDefaultColor is the row foreground color for tasks with
+	// no priority set — left unstyled (default terminal foreground),
+	// matching lazygit's "default" theme color.
+	PriorityLowDefaultColor = paletteDefault
 
 	// minWidth/minHeight guard against nonsensical (zero or negative)
 	// panel sizes, e.g. before the first tea.WindowSizeMsg arrives. minHeight

@@ -64,10 +64,24 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("245"))
 
-	selectedRowStyle = lipgloss.NewStyle().
-				Background(panel.SelectedRowBackground).
-				Bold(true)
 )
+
+// priorityColor returns the row foreground color for a task's priority
+// field ("H"/"M"/"L"/empty), per the palette roles defined in
+// internal/ui/panel. Unrecognized values fall back to the default
+// (unstyled) color, same as no priority.
+func priorityColor(priority string) lipgloss.Color {
+	switch priority {
+	case "H":
+		return panel.PriorityHighColor
+	case "M":
+		return panel.PriorityMediumColor
+	case "L":
+		return panel.PriorityLowColor
+	default:
+		return panel.PriorityLowDefaultColor
+	}
+}
 
 // Model is a Bubble Tea model rendering a bordered, selectable list of
 // taskwarrior tasks.
@@ -217,16 +231,7 @@ func (m Model) View() string {
 		start, end := panel.ScrollWindow(m.cursor, len(m.tasks), visibleRows)
 		for i := start; i < end; i++ {
 			t := m.tasks[i]
-			row := formatRow(innerWidth,
-				fmt.Sprintf("%d", t.ID),
-				t.Description,
-				t.Project,
-				t.Priority,
-				t.Due,
-			)
-			if i == m.cursor {
-				row = selectedRowStyle.Render(row)
-			}
+			row := renderDataRow(innerWidth, t, i == m.cursor)
 			b.WriteString(row)
 			if i < end-1 {
 				b.WriteString("\n")
@@ -251,16 +256,7 @@ func (m Model) View() string {
 // formatRow lays out the fixed-width columns used by both the header and
 // data rows so they stay aligned.
 func formatRow(width int, id, description, project, priority, due string) string {
-	const (
-		idWidth       = 4
-		projectWidth  = 12
-		priorityWidth = 4
-		dueWidth      = 10
-	)
-	descWidth := width - idWidth - projectWidth - priorityWidth - dueWidth - 4
-	if descWidth < 8 {
-		descWidth = 8
-	}
+	idWidth, descWidth, projectWidth, priorityWidth, dueWidth := columnWidths(width)
 
 	return fmt.Sprintf("%-*s %-*s %-*s %-*s %-*s",
 		idWidth, truncate(id, idWidth),
@@ -269,6 +265,52 @@ func formatRow(width int, id, description, project, priority, due string) string
 		priorityWidth, truncate(priority, priorityWidth),
 		dueWidth, truncate(due, dueWidth),
 	)
+}
+
+// columnWidths returns the fixed column widths shared by formatRow (header)
+// and renderDataRow (data rows), so the two stay aligned.
+func columnWidths(width int) (idWidth, descWidth, projectWidth, priorityWidth, dueWidth int) {
+	const (
+		fixedIDWidth       = 4
+		fixedProjectWidth  = 12
+		fixedPriorityWidth = 4
+		fixedDueWidth      = 10
+	)
+	descWidth = width - fixedIDWidth - fixedProjectWidth - fixedPriorityWidth - fixedDueWidth - 4
+	if descWidth < 8 {
+		descWidth = 8
+	}
+	return fixedIDWidth, descWidth, fixedProjectWidth, fixedPriorityWidth, fixedDueWidth
+}
+
+// renderDataRow lays out one task's row using the same column widths as
+// formatRow, but colors only the Priority cell by the task's priority
+// (see priorityColor) rather than the whole row — coloring the entire row
+// would compete with a possible future overdue-due-date highlight in the
+// Due column. When selected is true, the row-highlight background/bold
+// (matching panel.SelectedRowBackground) is applied across every cell and
+// the inter-column spacing so the highlight still reads as a full-row bar.
+func renderDataRow(width int, t taskwarrior.Task, selected bool) string {
+	idWidth, descWidth, projectWidth, priorityWidth, dueWidth := columnWidths(width)
+
+	base := lipgloss.NewStyle()
+	if selected {
+		base = base.Background(panel.SelectedRowBackground).Bold(true)
+	}
+	priorityStyle := base.Foreground(priorityColor(t.Priority))
+
+	pad := func(s string, w int) string {
+		return fmt.Sprintf("%-*s", w, truncate(s, w))
+	}
+
+	sep := base.Render(" ")
+	return strings.Join([]string{
+		base.Render(pad(fmt.Sprintf("%d", t.ID), idWidth)),
+		base.Render(pad(t.Description, descWidth)),
+		base.Render(pad(t.Project, projectWidth)),
+		priorityStyle.Render(pad(t.Priority, priorityWidth)),
+		base.Render(pad(t.Due, dueWidth)),
+	}, sep)
 }
 
 // truncate shortens s to fit within width, adding an ellipsis if it was cut.

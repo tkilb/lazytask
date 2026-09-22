@@ -6,10 +6,13 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tkilb/lazytask/internal/taskwarrior"
+	"github.com/tkilb/lazytask/internal/ui/panel"
 )
 
 // sampleTasks returns fixture data used across tests; no taskwarrior
@@ -277,4 +280,48 @@ func TestModel_View_ScrollsToKeepCursorVisible(t *testing.T) {
 	assert.Contains(t, view, "task 20")
 	assert.NotContains(t, view, "task 1 ")
 	assert.Contains(t, view, "20 of 20")
+}
+
+func TestPriorityColor(t *testing.T) {
+	cases := []struct {
+		name     string
+		priority string
+		want     lipgloss.Color
+	}{
+		{"high", "H", panel.PriorityHighColor},
+		{"medium", "M", panel.PriorityMediumColor},
+		{"low", "L", panel.PriorityLowColor},
+		{"none", "", panel.PriorityLowDefaultColor},
+		{"unrecognized", "X", panel.PriorityLowDefaultColor},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, priorityColor(c.priority))
+		})
+	}
+}
+
+func TestRenderDataRow_ColorsOnlyPriorityCell(t *testing.T) {
+	// Tests run without a TTY, so lipgloss auto-detects "no color" and
+	// styles become no-ops; force a color profile so the ANSI codes this
+	// test asserts on actually get emitted (matches a real terminal run).
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home", Priority: "H", Due: "2026-09-20"}
+
+	row := renderDataRow(80, task, false)
+
+	priorityCell := lipgloss.NewStyle().Foreground(panel.PriorityHighColor).Render(
+		fmt.Sprintf("%-*s", 4, "H"),
+	)
+	assert.Contains(t, row, priorityCell)
+
+	// The description cell must not carry the priority foreground color:
+	// rendering it plain and re-wrapping in the priority color should not
+	// match what's actually in the row.
+	_, descWidth, _, _, _ := columnWidths(80)
+	plainDescCell := fmt.Sprintf("%-*s", descWidth, "Buy groceries")
+	coloredDescCell := lipgloss.NewStyle().Foreground(panel.PriorityHighColor).Render(plainDescCell)
+	assert.NotContains(t, row, coloredDescCell)
 }
