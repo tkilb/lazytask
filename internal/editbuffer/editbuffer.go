@@ -4,9 +4,9 @@
 //
 //	Description: <text, may span multiple lines>
 //	Project: <text>
+//	Tags: tag1, tag2
 //	Priority: <text>
 //	Due: <text>
-//	Tags: tag1, tag2
 //	---
 //	ID: <int>
 //	UUID: <string>
@@ -36,7 +36,7 @@ const divider = "---"
 
 // editableKeys are the recognized field labels in the editable section, in
 // the order they're written by Serialize.
-var editableKeys = []string{"Description", "Project", "Priority", "Due", "Tags"}
+var editableKeys = []string{"Description", "Project", "Tags", "Priority", "Due"}
 
 // EditableFields holds the subset of a Task's fields that are user-editable
 // via the buffer, as parsed back from edited buffer content.
@@ -55,9 +55,9 @@ func Serialize(t taskwarrior.Task) string {
 
 	fmt.Fprintf(&b, "Description: %s\n", t.Description)
 	fmt.Fprintf(&b, "Project: %s\n", t.Project)
+	fmt.Fprintf(&b, "Tags: %s\n", strings.Join(t.Tags, ", "))
 	fmt.Fprintf(&b, "Priority: %s\n", t.Priority)
 	fmt.Fprintf(&b, "Due: %s\n", t.Due)
-	fmt.Fprintf(&b, "Tags: %s\n", strings.Join(t.Tags, ", "))
 	b.WriteString(divider + "\n")
 	fmt.Fprintf(&b, "ID: %d\n", t.ID)
 	fmt.Fprintf(&b, "UUID: %s\n", t.UUID)
