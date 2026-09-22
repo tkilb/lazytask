@@ -294,10 +294,20 @@ begins, since scope/design may shift by the time we get there.
      filter-state infra from Chunk 4: lists distinct tags, with an `*any*`
      entry first (wrapped in `*`), selecting a tag sets a `+tag` filter.
      Also sourced from the same unfiltered query as Chunk 4, for the same
-     reason.
-  6. **Details panel (key 0, right column)** — full-detail read-only view
-     of the Tasks-selected task, occupying the whole right column; visible
-     in the border like lazygit's focused-panel treatment.
+     reason. Still pending sign-off/implementation — explicitly deferred
+     when Chunk 6 was pulled forward out of order (see below).
+  6. ~~**Details panel (key 0, right column)**~~ — **DONE.** Implemented
+     out of order ahead of Chunk 5, at the user's explicit direction
+     (confirmed via prompt before starting, since the process normally
+     requires strict in-order, one-chunk-at-a-time sign-off). Full-detail,
+     read-only, multi-line view of whichever task is selected in Tasks
+     (ID, UUID, Description, Status, Project, Tags, Priority, Due,
+     Urgency, Entry, Modified, and End when set), occupying the whole
+     right column, read live off the Tasks list's current selection on
+     every render (same pattern as the Status panel — no extra state to
+     keep in sync). `(none)` placeholders for empty Project/Tags/Priority/
+     Due; `End` is omitted entirely unless present (e.g. non-completed
+     tasks).
 
 ### Phase 3 — Customization
 

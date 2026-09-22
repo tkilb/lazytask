@@ -1272,11 +1272,58 @@ func (m model) statusPanelContent() string {
 	return fmt.Sprintf("#%d  [%s]  P:%s  T:%s", task.ID, task.Status, project, tags)
 }
 
+// detailsPanelContent returns the full-detail, read-only, multi-line view
+// shown in the Details panel for whatever task is currently selected in
+// the Tasks list. It updates live as the Tasks cursor moves, since it
+// always reads the list's current selection (same approach as
+// statusPanelContent).
+func (m model) detailsPanelContent() string {
+	task, ok := m.list.Selected()
+	if !ok {
+		return "(no task selected)"
+	}
+
+	project := task.Project
+	if project == "" {
+		project = "(none)"
+	}
+	tags := "(none)"
+	if len(task.Tags) > 0 {
+		tags = strings.Join(task.Tags, ",")
+	}
+	priority := task.Priority
+	if priority == "" {
+		priority = "(none)"
+	}
+	due := task.Due
+	if due == "" {
+		due = "(none)"
+	}
+
+	lines := []string{
+		fmt.Sprintf("ID:          %d", task.ID),
+		fmt.Sprintf("UUID:        %s", task.UUID),
+		fmt.Sprintf("Description: %s", task.Description),
+		fmt.Sprintf("Status:      %s", task.Status),
+		fmt.Sprintf("Project:     %s", project),
+		fmt.Sprintf("Tags:        %s", tags),
+		fmt.Sprintf("Priority:    %s", priority),
+		fmt.Sprintf("Due:         %s", due),
+		fmt.Sprintf("Urgency:     %.2f", task.Urgency),
+		fmt.Sprintf("Entry:       %s", task.Entry),
+		fmt.Sprintf("Modified:    %s", task.Modified),
+	}
+	if task.End != "" {
+		lines = append(lines, fmt.Sprintf("End:         %s", task.End))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // renderGrid lays out the lazygit-style panel grid: a left column of 3
 // stacked rows (Status, Tasks, and a bottom row splitting Projects/Tags
 // into side-by-side subcolumns) and one large panel (Details) filling the
-// right column. Tasks (slot 2) and Projects (slot 3) have real content;
-// Tags and Details remain placeholders until later chunks.
+// right column. Tasks (slot 2), Projects (slot 3), and Details (slot 0)
+// have real content; Tags remains a placeholder until a later chunk.
 func (m model) renderGrid() string {
 	leftWidth, rightWidth, statusHeight, _, bottomHeight, fullHeight := m.gridDims()
 	_, tagsWidth := subColumnWidths(leftWidth)
@@ -1289,7 +1336,7 @@ func (m model) renderGrid() string {
 
 	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, bottomRow)
 
-	details := panel.Render(panelTitle(focusDetails), "(coming soon)", rightWidth, fullHeight, m.focus == focusDetails)
+	details := panel.Render(panelTitle(focusDetails), m.detailsPanelContent(), rightWidth, fullHeight, m.focus == focusDetails)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, details)
 }

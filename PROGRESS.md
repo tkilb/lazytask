@@ -83,7 +83,17 @@
     `filterState.equal` to compare filters by value (needed since the
     `*string` project field breaks plain `==`/`!=`) so nav that doesn't
     change the selection doesn't trigger a redundant refetch.
-  - 🔜 Chunk 5 (Tags panel, key 4) is next, pending sign-off.
+  - 🔜 Chunk 5 (Tags panel, key 4) still pending sign-off/implementation —
+    explicitly deferred by the user.
+  - ✅ **Chunk 6 (Details panel, key 0) — DONE.** Implemented out of order
+    ahead of Chunk 5 at the user's explicit direction (confirmed via
+    prompt before starting). Details panel now shows a full-detail,
+    read-only, multi-line view of whichever task is selected in Tasks
+    (ID, UUID, Description, Status, Project, Tags, Priority, Due, Urgency,
+    Entry, Modified, and End when set), read live off the Tasks list's
+    current selection on every render — same pattern as the Status panel.
+    `(none)` placeholders for empty Project/Tags/Priority/Due; `End` is
+    omitted entirely unless present (e.g. non-completed tasks).
 - ✅ **Global vs. local keybinding architecture + Done/Deleted task
   reopen/restore/purge — DONE.** Ad-hoc feature (direct instruction, not
   from the Section 7 backlog), delivered as 3 signed-off chunks plus

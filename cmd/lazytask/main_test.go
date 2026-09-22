@@ -462,6 +462,74 @@ func TestStatusPanelContent_UpdatesWithSelection(t *testing.T) {
 	assert.Equal(t, "#2  [pending]  P:home  T:(none)", mm.statusPanelContent())
 }
 
+func TestDetailsPanelContent(t *testing.T) {
+	t.Run("shows full task detail", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{
+				ID:          7,
+				UUID:        "abc-123",
+				Description: "Mow lawn",
+				Status:      "pending",
+				Project:     "home",
+				Priority:    "H",
+				Due:         "20260101T000000Z",
+				Entry:       "20250101T000000Z",
+				Modified:    "20250102T000000Z",
+				Tags:        []string{"urgent", "chores"},
+				Urgency:     5.5,
+			},
+		})}
+		content := m.detailsPanelContent()
+		assert.Contains(t, content, "ID:          7")
+		assert.Contains(t, content, "UUID:        abc-123")
+		assert.Contains(t, content, "Description: Mow lawn")
+		assert.Contains(t, content, "Status:      pending")
+		assert.Contains(t, content, "Project:     home")
+		assert.Contains(t, content, "Tags:        urgent,chores")
+		assert.Contains(t, content, "Priority:    H")
+		assert.Contains(t, content, "Due:         20260101T000000Z")
+		assert.Contains(t, content, "Urgency:     5.50")
+		assert.Contains(t, content, "Entry:       20250101T000000Z")
+		assert.Contains(t, content, "Modified:    20250102T000000Z")
+		assert.NotContains(t, content, "End:")
+	})
+
+	t.Run("shows placeholders for empty project, tags, priority, due", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{ID: 5, Status: "pending", Description: "Buy milk"},
+		})}
+		content := m.detailsPanelContent()
+		assert.Contains(t, content, "Project:     (none)")
+		assert.Contains(t, content, "Tags:        (none)")
+		assert.Contains(t, content, "Priority:    (none)")
+		assert.Contains(t, content, "Due:         (none)")
+	})
+
+	t.Run("shows End when task is completed", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{ID: 9, Status: "completed", Description: "Done task", End: "20250103T000000Z"},
+		})}
+		assert.Contains(t, m.detailsPanelContent(), "End:         20250103T000000Z")
+	})
+
+	t.Run("shows placeholder when no task selected", func(t *testing.T) {
+		m := model{list: tasklist.New(nil)}
+		assert.Equal(t, "(no task selected)", m.detailsPanelContent())
+	})
+
+	t.Run("updates live as selection moves", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{ID: 1, Status: "pending", Description: "A"},
+			{ID: 2, Status: "pending", Description: "B"},
+		})}
+		assert.Contains(t, m.detailsPanelContent(), "Description: A")
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		mm := newModel.(model)
+		assert.Contains(t, mm.detailsPanelContent(), "Description: B")
+	})
+}
+
 func TestModelUpdate_AKeyEntersAddingMode(t *testing.T) {
 	m := model{list: tasklist.New(nil), add: addform.New()}
 
