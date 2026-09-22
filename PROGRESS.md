@@ -2,186 +2,27 @@
 
 ## Status Overview
 
-**v1 (MVP) — COMPLETE.** See `git log` for the full per-chunk history.
+**v1 (MVP) — COMPLETE.** See `git log` for full per-chunk history.
 
-**Phase 2 progress:**
-- ✅ Focus newly-added task in list — after add-task submit, the list now
-  selects the newly created task once the refresh completes.
-- ✅ Popups for warnings and errors — new `internal/ui/popup` package
-  renders bordered, colored overlay boxes on top of the preserved
-  background (via `popup.Overlay`): `Box` for Info/Warning/Error severities
-  (dismiss on any key), and `ConfirmBox` for yes/no confirmations, sharing a
-  `renderBox` layout helper. Follow-up ad-hoc UI passes (direct
-  instruction) applied the same popup styling elsewhere for consistency:
-  - The add-task form is now a centered popup overlay instead of a
-    full-screen panel — the grid stays visible behind it, matching the
-    look/feel of the other popups.
-  - The delete-confirmation prompt (previously inline status-bar text,
-    `Delete task N "desc"? (y/n)`) is now an orange `ConfirmBox` overlay
-    with a "Confirm" title and `(y) confirm  (n/esc) cancel` hint; the
-    old `deleteBindings` status-bar entry was removed since it's no
-    longer needed.
-- 🔜 General panel layout (grid + focus nav, status/tasks-tabs/projects/tags
-  panels, details panel) — UX discussed and scoped into 6 chunks in
-  requirements.md §7. This also covers what was previously listed as the
-  separate "filter/search panel" and "project & tag side panels" items —
-  they turned out to be one cohesive design, not three.
-  - ✅ **Chunk 1 (panel grid scaffold + focus navigation) — DONE.**
-    Two-column 50/50 grid (Status/Tasks/Projects/Tags stacked left,
-    Details full-height right), number-key (`0`-`4`) and `Tab`/`Shift+Tab`
-    focus cycling with lazygit-style border highlighting, shared
-    `internal/ui/panel` styling helpers. Includes a follow-up visual pass:
-    panel titles now embed inline in the top border (e.g.
-    `╭──[1]-Status────╮`) instead of a separate content row, reclaiming a
-    row of height per panel, and the Tasks panel shows its `[2]-Tasks`
-    number-key hint consistently with the other panels.
-    - ✅ Follow-up layout refinement (ad-hoc, direct instruction) also
-      done: Projects and Tags moved from two stacked rows into one row of
-      two half-width panels at the bottom of the left column; row heights
-      are now static instead of an even split (Status fixed at 1 content
-      line, Tasks gets the largest share, Projects/Tags share the rest —
-      tuned to ~67%/33% of the non-Status height per user feedback).
-      Fixed two related bugs found along the way: `internal/ui/panel`'s
-      `minHeight` clamp (3 → 1) was forcing Status to 3 lines instead of
-      1, and `internal/ui/tasklist`'s `View()` now stretch-fills its
-      assigned height instead of sizing purely from task count (it
-      previously left a gap at the bottom of the left column). Tasks
-      panel scrolling was explicitly deferred by the user as a follow-up
-      feature (see "Up Next" below) — not implemented yet.
-  - ✅ **Chunk 2 (Status panel, key 1) — DONE.** Status panel shows
-    `#<id> [<status>] P:<project> T:<tags>` for whatever task is currently
-    selected in Tasks (with `(none)` placeholders for empty project/tags),
-    read live off the Tasks list's current selection on every render — no
-    extra state to keep in sync.
-  - ✅ **Chunk 3 (Tasks panel status tabs, Todo/Done/Deleted) — DONE.**
-    Tasks panel now has 3 tabs (Todo/Done/Deleted), cycled via `[`/`]`,
-    each re-querying `task export` with the matching
-    `status:pending`/`status:completed`/`status:deleted` filter; title
-    renders as `[2]-Todo - Done - Deleted` with the active tab visually
-    distinct, via a new `panel.FrameTabs` helper. Two follow-up ad-hoc
-    styling passes (direct instruction, same in-flight chunk): the active
-    tab first switched from an inverted/reverse-video highlight to a solid
-    focus-colored label, then — to fix a contrast bug where the whole
-    title (border, `[2]-` prefix, and active tab) rendered uniformly
-    magenta whenever the Tasks panel itself was focused, making the active
-    tab indistinguishable — the active/inactive tab colors were split into
-    their own focus-independent constants (`activeTabColor` orange,
-    `inactiveTabColor` dim gray), separate from the panel's own
-    `FocusedColor`/`UnfocusedColor` border styling. A related tangent
-    (theming/configurable colors) was raised but explicitly deferred; it's
-    logged as a new Phase 3 backlog item in requirements.md, not started.
-  - ✅ **Chunk 4 (Shared filter state + Projects panel, key 3) — DONE.**
-    New `filterState` struct (`cmd/lazytask/filter.go`, project as
-    `*string`) plus an `internal/ui/projects` panel listing distinct
-    project names from an unfiltered query, so the list doesn't shrink as
-    the filter is applied. Special entries `(all)` (clear filter) and
-    `(none)` (`project:` empty) always sort first, `(all)` then `(none)`,
-    ahead of real projects — settled on this label style after trying a
-    few alternatives. Follow-up (direct instruction): navigating the
-    Projects panel (`↑/k`/`↓/j`) now auto-applies the filter and refetches
-    Tasks immediately, instead of requiring `enter`; added
-    `filterState.equal` to compare filters by value (needed since the
-    `*string` project field breaks plain `==`/`!=`) so nav that doesn't
-    change the selection doesn't trigger a redundant refetch.
-  - 🔜 Chunk 5 (Tags panel, key 4) still pending sign-off/implementation —
-    explicitly deferred by the user.
-  - ✅ **Chunk 6 (Details panel, key 0) — DONE.** Implemented out of order
-    ahead of Chunk 5 at the user's explicit direction (confirmed via
-    prompt before starting). Details panel now shows a full-detail,
-    read-only, multi-line view of whichever task is selected in Tasks
-    (ID, UUID, Description, Status, Project, Tags, Priority, Due, Urgency,
-    Entry, Modified, and End when set), read live off the Tasks list's
-    current selection on every render — same pattern as the Status panel.
-    `(none)` placeholders for empty Project/Tags/Priority/Due; `End` is
-    omitted entirely unless present (e.g. non-completed tasks).
-- ✅ **Global vs. local keybinding architecture + Done/Deleted task
-  reopen/restore/purge — DONE.** Ad-hoc feature (direct instruction, not
-  from the Section 7 backlog), delivered as 3 signed-off chunks plus
-  follow-up refinements:
-  - Chunk 1: reworked `cmd/lazytask/main.go` key dispatch into a lazygit-
-    style global tier (quit, panel focus `0`-`4`, `Tab`/`Shift+Tab`) and a
-    Tasks-panel-local tier (nav, `[`/`]`, `a`/`d`/`x`/`e`, `r`); dropped
-    the old `r` = refresh binding (redundant now that mutations/tab
-    switches auto-refresh).
-  - Chunk 2: added `Restore` (`modify status:pending`) bound to `r` on
-    Done/Deleted tabs to move a task back to Todo; user-facing label
-    settled on "reopen" after discussion (internal `Restore`/
-    `TaskRestorer`/`restoreTask` naming kept as-is).
-  - Chunk 3: added `Purge` (`purge`) bound to `x` on the Deleted tab for
-    permanent deletion (soft-delete `x` unchanged elsewhere).
-  - Follow-up: fixed a bug where `d` errored on the Done tab (taskwarrior
-    rejects `done` on already-completed tasks) — `d` is now a no-op there
-    (hint hidden), and on the Deleted tab `d` restores-then-dones in one
-    step. Added confirmation popups (`y`/`enter` confirm, `n`/`esc`
-    cancel) for mark-done and reopen/restore actions, matching the
-    existing delete/purge confirm pattern.
-  - Follow-up: popup wording no longer references the numeric task ID on
-    Done/Deleted tabs (always `0` there, so meaningless) — only Todo-tab
-    prompts keep the ID.
-  - Follow-up: all confirm popups now accept `enter` as well as `y`;
-    `popup.ConfirmBox` hint text updated to mention both.
-
-- ✅ **Project rename + Projects-panel task counts — DONE.** Ad-hoc feature
-  (direct instruction, not from the Section 7 backlog), delivered as 2
-  signed-off chunks:
-  - Chunk 1 (counts): Projects panel entries show a fixed-width `(N)`
-    task-count suffix, right-aligned so counts stay visually aligned;
-    counts only pending ("todo lane") tasks. `(all)` shows the total
-    pending count, `(none)` shows the pending count of projectless tasks.
-  - Chunk 2 (rename): `Shift+R` on a real project opens a rename
-    text-input box (generalized `internal/ui/addform` via new
-    `NewNamed`/`SetValue` API), pre-filled with the current name and
-    trimming leading/trailing whitespace on submit. Confirming (orange
-    `ConfirmBox`) renames the project on every task regardless of status,
-    via the existing `Export`/`Import` round-trip with exact-match
-    filtering done in Go (avoids taskwarrior's prefix-matching project
-    filters). If the trimmed target name collides with an existing
-    different project, a second red `DangerConfirmBox` (new
-    `popup.DangerConfirmBox`) warns the rename will merge tasks into that
-    project. The active project filter follows the rename when it was
-    pointed at the renamed project.
-  - Follow-up bugfix (QA feedback, same feature): projects were vanishing
-    entirely once their last pending task was deleted (or lingering
-    forever post-restart if all their tasks were already done), since
-    `fetchProjects` rebuilt the whole list from scratch each refresh. Now
-    scoped to `status:pending` only, unioned each fetch into a new
-    session-lifetime `knownProjects` set on `model` — a project stays
-    visible at `(0)` for the rest of the session once seen, but won't
-    reappear after a restart if it has no pending tasks left. Also fixed a
-    separate stale-counts bug: marking done, deleting, restoring, and
-    purging only refreshed the Tasks list, never the Projects panel, so
-    `(N)` could be left showing a stale non-zero count; all four actions
-    now refresh both panels.
-
-- ✅ **Global add key + project-filter auto-assign on new tasks — DONE.**
-  Ad-hoc feature (direct instruction, not from the Section 7 backlog):
-  - `a` (open the add-task form) moved from the Tasks-panel-local
-    keybinding tier to the global tier in `cmd/lazytask/main.go`, so it now
-    opens from any panel focus, not just Tasks (matching the status-bar
-    hint, which moved from `tasksLocalBindings` to `globalBindings`).
-  - Submitting the add form now auto-assigns the task to whichever real
-    project is currently selected via the Projects panel filter
-    (`filterState.project`), passed as a `project:<name>` extra arg to
-    `TaskAdder.Add`. The `(all)` (nil) and `(none)` (empty-string) special
-    filter entries are excluded — only an actual project name is applied.
-    `addTask` gained a variadic `extraArgs ...string` parameter to carry
-    this through.
+**Phase 2 (Navigation & Discovery)** — mostly complete: panel grid + focus
+nav, Status panel, Tasks panel status tabs (Todo/Done/Deleted), shared
+filter state + Projects panel (with rename/counts), Details panel, popups
+for warnings/errors/confirmations, global vs. local keybinding tiers with
+Done/Deleted reopen/restore/purge, global add key with project auto-assign.
+See `requirements.md` §7 for what's still open.
 
 ## Up Next
 
-Next work comes from requirements.md §7 "Future Phases":
+From `requirements.md` §7 "Future Phases":
 
-- **Phase 2 — Navigation & Discovery**: Chunks 1-4 of general panel layout
-  are done (see above); Chunk 5 (Tags panel) needs sign-off to start;
-  popups for warnings/errors are done (see above); Tasks panel scrolling
-  (deferred during the Chunk 1 layout refinement) still needs to be
-  scoped/chunked.
-- **Phase 3 — Customization**: theming/configurable colors (newly logged,
-  needs a YAML schema decision), configurable keymaps via YAML, custom
-  user-defined tasks/actions via YAML.
+- **Phase 2 remainder**: Tags panel (key `4`, needs sign-off); Tasks panel
+  scrolling (currently overflows unclipped when the list is taller than
+  the panel).
+- **Phase 3 — Customization**: theming/configurable colors (needs a YAML
+  schema decision), configurable keymaps via YAML, custom user-defined
+  tasks/actions via YAML.
 - **Phase 4 — Data Safety & Sync**: undo stack, taskwarrior sync support.
 
 Each phase's chunk list is a proposal only and needs fresh scoping/sign-off
 before its first chunk starts, per requirements.md §5/§7 — nothing here is
 to be assumed automatically.
-
