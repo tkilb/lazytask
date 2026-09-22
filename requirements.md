@@ -149,13 +149,15 @@ default `selectedLineBgColor`.
 
 ### Phase 4 — Data Safety & Sync
 
-- **Undo stack** — reverse the last mutation (add/done/delete/edit). Needs a
-  decision on scope (single-level vs. multi-level undo, in-memory vs.
-  persisted across restarts) before chunking.
-- **Taskwarrior sync support** — wrap `task sync` so multi-machine sync
-  configured outside lazytask can be triggered/monitored from the TUI. Needs
-  a decision on how much sync-config setup (if any) lazytask should own vs.
-  assume is already configured via taskwarrior's own `sync` settings.
+DONE **Undo stack** — multi-level, in-memory (not persisted across
+restarts) undo/redo stack (`internal/undo`) covering done/delete/restore/
+purge mutations from the Tasks panel. `u` undoes the most recent action,
+`ctrl+r` redoes the most recently undone one; pushing a new action after
+an undo discards stale redo history (standard undo-stack semantics).
+Purge's undo re-imports the pre-purge task snapshot via `importer.Import`,
+so purge is undoable within the running session even though Taskwarrior's
+own purge is normally irreversible. Add/edit mutations are not yet wired
+into the undo stack — open follow-up if needed.
 
 ### Phase 5 — Priority logic
 

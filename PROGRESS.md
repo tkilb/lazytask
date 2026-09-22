@@ -20,11 +20,18 @@ contrast bug. Tasks/Projects panel selected-row highlighting now uses the
 same blue (`panel.SelectedRowBackground`) instead of a generic `Reverse`,
 matching lazygit's `selectedLineBgColor`.
 
+**Phase 4 (Data Safety & Sync) — undo stack chunk DONE**: multi-level,
+in-memory undo/redo (`internal/undo.Stack`) wired into done/delete/
+restore/purge on the Tasks panel (`u` = undo, `ctrl+r` = redo), with
+purge's undo re-importing the pre-purge task snapshot. Not persisted
+across restarts; add/edit mutations aren't covered yet.
+
 ## Up Next
 
 From `requirements.md` §7 "Future Phases":
 
-- **Phase 4 — Data Safety & Sync**: undo stack, taskwarrior sync support.
+- **Phase 4 — Data Safety & Sync**: taskwarrior sync support remains open
+  (undo stack chunk is done).
 - **Phase 5 — Priority logic**: priority-based coloring, priority sort
   mode, quick set-priority keys, urgency-based reordering.
 

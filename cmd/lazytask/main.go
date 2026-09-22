@@ -21,6 +21,7 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/statusbar"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
+	"github.com/tkilb/lazytask/internal/undo"
 )
 
 // panelFocus identifies which panel in the grid currently has keyboard
@@ -116,6 +117,8 @@ const (
 var globalBindings = []statusbar.Binding{
 	{Key: "0-4/tab", Label: "panels"},
 	{Key: "a", Label: "add"},
+	{Key: "u", Label: "undo"},
+	{Key: "ctrl+r", Label: "redo"},
 	{Key: "q", Label: "quit"},
 }
 
@@ -267,35 +270,74 @@ type taskAddErrMsg struct {
 	err error
 }
 
-// taskDoneMsg carries the result of a successful Done call.
-type taskDoneMsg struct{}
+// taskDoneMsg carries the result of a successful Done call, plus the
+// undo.Action that reverses it (see doneTask).
+type taskDoneMsg struct {
+	action undo.Action
+}
 
 // taskDoneErrMsg carries the error from a failed Done call.
 type taskDoneErrMsg struct {
 	err error
 }
 
-// taskDeletedMsg carries the result of a successful Delete call.
-type taskDeletedMsg struct{}
+// taskDeletedMsg carries the result of a successful Delete call, plus the
+// undo.Action that reverses it (see deleteTask).
+type taskDeletedMsg struct {
+	action undo.Action
+}
 
 // taskDeleteErrMsg carries the error from a failed Delete call.
 type taskDeleteErrMsg struct {
 	err error
 }
 
-// taskRestoredMsg carries the result of a successful Restore call.
-type taskRestoredMsg struct{}
+// taskRestoredMsg carries the result of a successful Restore call, plus the
+// undo.Action that reverses it (see restoreTask).
+type taskRestoredMsg struct {
+	action undo.Action
+}
 
 // taskRestoreErrMsg carries the error from a failed Restore call.
 type taskRestoreErrMsg struct {
 	err error
 }
 
-// taskPurgedMsg carries the result of a successful Purge call.
-type taskPurgedMsg struct{}
+// taskPurgedMsg carries the result of a successful Purge call, plus the
+// undo.Action that reverses it by re-importing the pre-purge snapshot (see
+// purgeTask).
+type taskPurgedMsg struct {
+	action undo.Action
+}
 
 // taskPurgeErrMsg carries the error from a failed Purge call.
 type taskPurgeErrMsg struct {
+	err error
+}
+
+// undoAppliedMsg carries the description of the undo.Action whose Undo
+// func just ran successfully via the "u" key.
+type undoAppliedMsg struct {
+	description string
+}
+
+// undoErrMsg carries the error from a failed undo.Action.Undo invocation.
+// The stack has already advanced past this entry (see runUndo); this is an
+// intentional simplification for this first undo/redo chunk, matching how
+// the rest of the app's mutation errors aren't automatically retried
+// either.
+type undoErrMsg struct {
+	err error
+}
+
+// redoAppliedMsg carries the description of the undo.Action whose Redo
+// func just ran successfully via the "ctrl+r" key.
+type redoAppliedMsg struct {
+	description string
+}
+
+// redoErrMsg carries the error from a failed undo.Action.Redo invocation.
+type redoErrMsg struct {
 	err error
 }
 
@@ -358,6 +400,7 @@ type model struct {
 	projects       projects.Model
 	filter         filterState
 	knownProjects  map[string]struct{}
+	undo           undo.Stack
 }
 
 // initialModel constructs the app's starting state, including restoring
@@ -574,62 +617,143 @@ func addTask(adder TaskAdder, description string, extraArgs ...string) tea.Cmd {
 	}
 }
 
-// doneTask returns a tea.Cmd that marks the given task id as done via doner.
-func doneTask(doner TaskDoner, id string) tea.Cmd {
-	return func() tea.Msg {
-		if err := doner.Done(context.Background(), id); err != nil {
-			return taskDoneErrMsg{err: err}
-		}
-		return taskDoneMsg{}
-	}
-}
-
-// restoreThenDoneTask returns a tea.Cmd that restores the given task id
-// back to pending and then immediately marks it done. This is used to move
-// a Deleted task straight to Done, since Taskwarrior's `done` command
-// refuses to act on a task that isn't pending/waiting.
-func restoreThenDoneTask(restorer TaskRestorer, doner TaskDoner, id string) tea.Cmd {
+// doneTask returns a tea.Cmd that marks the given task id as done via
+// doner. If wasDeleted is true, the task is restored to pending first
+// (Taskwarrior's `done` refuses to act on a non-pending task), moving a
+// Deleted task straight to Done; the resulting undo.Action reverses either
+// case: back to pending (via restorer) or back to deleted (via deleter).
+func doneTask(doner TaskDoner, restorer TaskRestorer, deleter TaskDeleter, id string, wasDeleted bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		if err := restorer.Restore(ctx, id); err != nil {
-			return taskDoneErrMsg{err: err}
+		if wasDeleted {
+			if err := restorer.Restore(ctx, id); err != nil {
+				return taskDoneErrMsg{err: err}
+			}
 		}
 		if err := doner.Done(ctx, id); err != nil {
 			return taskDoneErrMsg{err: err}
 		}
-		return taskDoneMsg{}
+		return taskDoneMsg{action: undo.Action{
+			Description: fmt.Sprintf("mark task %s done", id),
+			Undo: func() error {
+				if wasDeleted {
+					return deleter.Delete(context.Background(), id)
+				}
+				return restorer.Restore(context.Background(), id)
+			},
+			Redo: func() error {
+				ctx := context.Background()
+				if wasDeleted {
+					if err := restorer.Restore(ctx, id); err != nil {
+						return err
+					}
+				}
+				return doner.Done(ctx, id)
+			},
+		}}
 	}
 }
 
+// deleteTask returns a tea.Cmd that deletes the given task id via deleter,
+// returning an undo.Action that reverses it via restorer.
 // deleteTask returns a tea.Cmd that deletes the given task id via deleter.
-func deleteTask(deleter TaskDeleter, id string) tea.Cmd {
+// from records which tab (Todo or Done) the task was deleted from, so the
+// resulting undo.Action's Undo can send it back to that same status: a
+// plain restore-to-pending if it was deleted from Todo, or a
+// restore-then-done if it was deleted from Done (mirroring doneTask's
+// wasDeleted handling, since Taskwarrior's `done` refuses a non-pending
+// task).
+func deleteTask(deleter TaskDeleter, restorer TaskRestorer, doner TaskDoner, id string, from tasklist.StatusTab) tea.Cmd {
 	return func() tea.Msg {
 		if err := deleter.Delete(context.Background(), id); err != nil {
 			return taskDeleteErrMsg{err: err}
 		}
-		return taskDeletedMsg{}
+		return taskDeletedMsg{action: undo.Action{
+			Description: fmt.Sprintf("delete task %s", id),
+			Undo: func() error {
+				ctx := context.Background()
+				if err := restorer.Restore(ctx, id); err != nil {
+					return err
+				}
+				if from == tasklist.TabDone {
+					return doner.Done(ctx, id)
+				}
+				return nil
+			},
+			Redo: func() error { return deleter.Delete(context.Background(), id) },
+		}}
 	}
 }
 
 // restoreTask returns a tea.Cmd that restores the given task id back to
-// pending status via restorer.
-func restoreTask(restorer TaskRestorer, id string) tea.Cmd {
+// pending status via restorer. from records which tab (Done or Deleted)
+// the task was restored from, so the resulting undo.Action's Undo can send
+// it back to that same status.
+func restoreTask(restorer TaskRestorer, doner TaskDoner, deleter TaskDeleter, id string, from tasklist.StatusTab) tea.Cmd {
 	return func() tea.Msg {
 		if err := restorer.Restore(context.Background(), id); err != nil {
 			return taskRestoreErrMsg{err: err}
 		}
-		return taskRestoredMsg{}
+		return taskRestoredMsg{action: undo.Action{
+			Description: fmt.Sprintf("restore task %s", id),
+			Undo: func() error {
+				ctx := context.Background()
+				switch from {
+				case tasklist.TabDone:
+					return doner.Done(ctx, id)
+				case tasklist.TabDeleted:
+					return deleter.Delete(ctx, id)
+				}
+				return nil
+			},
+			Redo: func() error { return restorer.Restore(context.Background(), id) },
+		}}
 	}
 }
 
-// purgeTask returns a tea.Cmd that permanently removes the given task id
-// via purger. Unlike deleteTask, this is irreversible.
-func purgeTask(purger TaskPurger, id string) tea.Cmd {
+// purgeTask returns a tea.Cmd that permanently removes task via purger.
+// Unlike Taskwarrior's own purge, this is undoable within lazytask: task's
+// full field set is captured as a JSON snapshot before purging, and the
+// resulting undo.Action's Undo re-creates the task via importer.Import
+// (same UUID, so it slots back in as the same task) rather than relying on
+// Taskwarrior itself, which offers no way to recover a purged task.
+func purgeTask(purger TaskPurger, importer TaskImporter, task taskwarrior.Task) tea.Cmd {
 	return func() tea.Msg {
+		id := taskID(task)
+		snapshot, err := json.Marshal(task)
+		if err != nil {
+			return taskPurgeErrMsg{err: err}
+		}
 		if err := purger.Purge(context.Background(), id); err != nil {
 			return taskPurgeErrMsg{err: err}
 		}
-		return taskPurgedMsg{}
+		return taskPurgedMsg{action: undo.Action{
+			Description: fmt.Sprintf("purge task %s", id),
+			Undo:        func() error { return importer.Import(context.Background(), snapshot) },
+			Redo:        func() error { return purger.Purge(context.Background(), id) },
+		}}
+	}
+}
+
+// runUndo returns a tea.Cmd that invokes a previously-pushed undo.Action's
+// Undo func (see the "u" key binding in Update).
+func runUndo(a undo.Action) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.Undo(); err != nil {
+			return undoErrMsg{err: err}
+		}
+		return undoAppliedMsg{description: a.Description}
+	}
+}
+
+// runRedo returns a tea.Cmd that invokes a previously-undone undo.Action's
+// Redo func (see the "ctrl+r" key binding in Update).
+func runRedo(a undo.Action) tea.Cmd {
+	return func() tea.Msg {
+		if err := a.Redo(); err != nil {
+			return redoErrMsg{err: err}
+		}
+		return redoAppliedMsg{description: a.Description}
 	}
 }
 
@@ -792,6 +916,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.adding = true
 			m.add = m.add.Focus()
 			return m, m.add.Init()
+		case "u":
+			act, ok := m.undo.Undo()
+			if !ok {
+				m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Nothing to undo"})
+				return m, nil
+			}
+			return m, runUndo(act)
+		case "ctrl+r":
+			act, ok := m.undo.Redo()
+			if !ok {
+				m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Nothing to redo"})
+				return m, nil
+			}
+			return m, runRedo(act)
 		}
 		// Projects-panel-local: navigation (up/down/j/k) is applied
 		// directly here, rather than being delegated to the bottom
@@ -905,23 +1043,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
+		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskDoneErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
+		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskRestoredMsg:
+		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskRestoreErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPurgedMsg:
+		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskPurgeErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case undoAppliedMsg:
+		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Undo: " + msg.description})
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+	case undoErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case redoAppliedMsg:
+		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Redo: " + msg.description})
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+	case redoErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
@@ -987,7 +1141,7 @@ func (m model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			return m, deleteTask(m.deleter, taskID(task))
+			return m, deleteTask(m.deleter, m.restorer, m.doner, taskID(task), m.list.Status())
 		case "n", "esc":
 			m.deleting = false
 			return m, nil
@@ -998,8 +1152,12 @@ func (m model) updateDeleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updatePurging handles messages while a permanent-delete (purge)
 // confirmation is pending. This is a distinct flow from updateDeleting
-// because purging is irreversible and only ever offered on the Deleted
-// tab, whereas "x" on Todo/Done still means the reversible soft-delete.
+// because purging is a much more destructive operation (Taskwarrior itself
+// offers no way to recover a purged task) and is only ever offered on the
+// Deleted tab, whereas "x" on Todo/Done still means the reversible
+// soft-delete. lazytask's own undo stack (see purgeTask) makes it
+// undoable within the running session, but only via "u" here, not via
+// Taskwarrior's own tooling.
 func (m model) updatePurging(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -1010,7 +1168,7 @@ func (m model) updatePurging(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			return m, purgeTask(m.purger, taskID(task))
+			return m, purgeTask(m.purger, m.importer, task)
 		case "n", "esc":
 			m.purging = false
 			return m, nil
@@ -1034,9 +1192,9 @@ func (m model) updateCompleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.list.Status() == tasklist.TabDeleted {
-				return m, restoreThenDoneTask(m.restorer, m.doner, taskID(task))
+				return m, doneTask(m.doner, m.restorer, m.deleter, taskID(task), true)
 			}
-			return m, doneTask(m.doner, taskID(task))
+			return m, doneTask(m.doner, m.restorer, m.deleter, taskID(task), false)
 		case "n", "esc":
 			m.completing = false
 			return m, nil
@@ -1057,7 +1215,7 @@ func (m model) updateRestoring(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			return m, restoreTask(m.restorer, taskID(task))
+			return m, restoreTask(m.restorer, m.doner, m.deleter, taskID(task), m.list.Status())
 		case "n", "esc":
 			m.restoring = false
 			return m, nil
