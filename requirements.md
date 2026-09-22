@@ -131,15 +131,21 @@ Phase 2 is now complete — nothing remaining is currently scoped.
 
 ### Phase 3 — Customization
 
-- **Theming (colors configurable via YAML)** — currently all panel
-  border/title colors live as hardcoded `lipgloss.Color` constants in
-  `internal/ui/panel` (`FocusedColor`, `UnfocusedColor`, plus the Tasks
-  panel's tab-highlight `activeTabColor`/`inactiveTabColor` added
-  alongside the status-tabs chunk). Raised as a tangent while fixing a
-  related contrast bug (the active status tab was indistinguishable from
-  the border when the Tasks panel itself was focused, since both used the
-  same focus color) — not yet scoped/chunked; needs a decision on the YAML
-  schema (named palette vs. per-role color keys) before chunking.
+DONE **Theming** — (no YAML config; hardcoded to match lazygit's default
+theme for tool consistency). Panel border/title colors in
+`internal/ui/panel` (`FocusedColor`, `UnfocusedColor`,
+`activeTabColor`/`inactiveTabColor`) now reference a small named
+`palette` block (`paletteDefault`/`paletteGreen`/`paletteBlue`) instead of
+raw color literals, keyed off lazygit's default `activeBorderColor`
+(green), `inactiveBorderColor` (default/unstyled), and
+`optionsTextColor` (blue) — this also fixes the original contrast bug
+(active status tab vs. focused-panel border) since the tab highlight
+(blue) and focus color (green) are now distinct. The Tasks/Projects
+panels' selected-row highlight (`selectedRowStyle` in
+`internal/ui/tasklist` and `internal/ui/projects`) was also switched from
+a generic `Reverse(true)` to an explicit blue background
+(`panel.SelectedRowBackground`, same `paletteBlue`), matching lazygit's
+default `selectedLineBgColor`.
 
 ### Phase 4 — Data Safety & Sync
 

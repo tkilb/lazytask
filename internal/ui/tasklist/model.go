@@ -65,7 +65,8 @@ var (
 			Foreground(lipgloss.Color("245"))
 
 	selectedRowStyle = lipgloss.NewStyle().
-				Reverse(true)
+				Background(panel.SelectedRowBackground).
+				Bold(true)
 )
 
 // Model is a Bubble Tea model rendering a bordered, selectable list of

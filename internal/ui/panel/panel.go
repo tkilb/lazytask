@@ -12,23 +12,48 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// palette is the single place ANSI color values are defined for this
+// package. Roles below (UnfocusedColor, FocusedColor, etc.) reference these
+// named entries instead of embedding raw color literals, so retuning the
+// look later is a one-line edit here rather than a hunt through the
+// package. Values are chosen to match lazygit's default theme colors
+// (github.com/jesseduffield/lazygit's default UserConfig) for cross-tool
+// visual consistency, not picked arbitrarily.
+const (
+	// paletteDefault leaves the terminal's own foreground color in place
+	// (no escape codes emitted), matching lazygit's "default" theme color.
+	paletteDefault = lipgloss.Color("")
+	// paletteGreen matches lazygit's default theme.activeBorderColor.
+	paletteGreen = lipgloss.Color("2")
+	// paletteBlue matches lazygit's default theme.optionsTextColor (also
+	// its selectedLineBgColor, reused here for the same row-highlight
+	// role in list panels).
+	paletteBlue = lipgloss.Color("4")
+)
+
 const (
 	// UnfocusedColor is the border/title color for a panel that does not
 	// currently have focus.
-	UnfocusedColor = lipgloss.Color("62")
+	UnfocusedColor = paletteDefault
 	// FocusedColor is the border/title color for the currently focused
 	// panel.
-	FocusedColor = lipgloss.Color("212")
+	FocusedColor = paletteGreen
 
-	// activeTabColor highlights the selected tab in a FrameTabs title. It
-	// is deliberately distinct from both FocusedColor and inactiveTabColor
-	// so the active tab stays visually identifiable even when the panel
-	// itself is focused (and its border/prefix are already FocusedColor).
-	activeTabColor = lipgloss.Color("214")
+	// activeTabColor highlights the selected tab in a FrameTabs title, kept
+	// deliberately distinct from FocusedColor so the active tab stays
+	// visually identifiable even when the panel itself is focused.
+	activeTabColor = paletteBlue
+
+	// SelectedRowBackground is the background color for the
+	// currently-selected row in a list panel (Tasks, Projects), matching
+	// lazygit's default theme.selectedLineBgColor (blue). Exported so
+	// list-owning packages outside panel can share it rather than each
+	// picking their own row-highlight color.
+	SelectedRowBackground = paletteBlue
 	// inactiveTabColor is used for the non-selected tabs in a FrameTabs
 	// title, deliberately independent of panel focus so it doesn't compete
 	// with activeTabColor.
-	inactiveTabColor = lipgloss.Color("245")
+	inactiveTabColor = paletteDefault
 
 	// minWidth/minHeight guard against nonsensical (zero or negative)
 	// panel sizes, e.g. before the first tea.WindowSizeMsg arrives. minHeight

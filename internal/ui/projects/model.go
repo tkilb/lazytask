@@ -25,7 +25,7 @@ const (
 	minPanelWidth = 20
 )
 
-var selectedRowStyle = lipgloss.NewStyle().Reverse(true)
+var selectedRowStyle = lipgloss.NewStyle().Background(panel.SelectedRowBackground).Bold(true)
 
 // Model is a Bubble Tea model rendering a bordered, selectable list of
 // distinct project names, plus the NoneLabel/AllLabel special entries
