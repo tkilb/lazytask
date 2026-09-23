@@ -140,6 +140,7 @@ var tasksLocalBindings = []statusbar.Binding{
 	{Key: "e", Label: "edit"},
 	{Key: "h/m/l", Label: "priority"},
 	{Key: "D", Label: "due date"},
+	{Key: "p", Label: "project filter"},
 	{Key: "ctrl+j/k", Label: "reorder"},
 }
 
@@ -464,6 +465,8 @@ type model struct {
 	renameConfirm  bool
 	datePicking    bool
 	datePick       datepick.Model
+	pickingProject bool
+	projectPicker  projects.Model
 	popups         popup.Model
 	quitting       bool
 	pendingFocusID int
@@ -507,6 +510,7 @@ func initialModel() model {
 		add:           addform.New(),
 		datePick:      datepick.New(),
 		projects:      projects.New(),
+		projectPicker: projects.New(),
 		knownProjects: make(map[string]struct{}),
 		filter:        filterState{project: persisted.Project},
 	}
@@ -1064,6 +1068,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.datePicking {
 		return m.updateDatePicking(msg)
 	}
+	if m.pickingProject {
+		return m.updateProjectPicking(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1194,6 +1201,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.datePick.Init()
 			}
 			return m, nil
+		case "p":
+			w, h := projectPickerSize(len(m.projects.Projects()) + 2)
+			m.projectPicker = m.projects.SetFocused(true).SetTitle("Project Filter")
+			var cmd tea.Cmd
+			m.projectPicker, cmd = m.projectPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
+			m.pickingProject = true
+			return m, cmd
 		case "ctrl+j":
 			if task, ok := m.list.Selected(); ok {
 				if neighbor, ok := m.list.Neighbor(1); ok {
@@ -1583,6 +1597,61 @@ func (m model) updateDatePicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// projectPickerWidth is the fixed outer width of the quick project-filter
+// popup (see updateProjectPicking); unlike the Projects panel in the grid,
+// it doesn't need to track the terminal's left-column width.
+const projectPickerWidth = 40
+
+// projectPickerSize returns the outer width/height to size the quick
+// project-filter popup's projects.Model at, given entryCount selectable
+// entries (project names plus the AllLabel/NoneLabel special entries): tall
+// enough to show up to 15 entries at once without scrolling, but no
+// smaller than 3, plus the 2 border rows projects.Model.View() expects the
+// outer height to include.
+func projectPickerSize(entryCount int) (width, height int) {
+	rows := entryCount
+	if rows > 15 {
+		rows = 15
+	}
+	if rows < 3 {
+		rows = 3
+	}
+	return projectPickerWidth, rows + 2
+}
+
+// updateProjectPicking handles messages while the quick project-filter
+// popup (opened via "p" from the Tasks panel) is active. Unlike the
+// Projects panel itself, moving the cursor here doesn't touch the shared
+// filter live — it's only applied on "enter" — so "esc" cleanly discards
+// an in-progress selection without side effects.
+func (m model) updateProjectPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.pickingProject = false
+			return m, nil
+		case "enter":
+			m.pickingProject = false
+			label, ok := m.projectPicker.Selected()
+			if !ok {
+				return m, nil
+			}
+			m.projects = m.projects.SelectLabel(label)
+			newFilter := m.filter.withProjectSelection(label)
+			if newFilter.equal(m.filter) {
+				return m, nil
+			}
+			m.filter = newFilter
+			return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+		}
+	}
+
+	var cmd tea.Cmd
+	m.projectPicker, cmd = m.projectPicker.Update(msg)
+	return m, cmd
+}
+
 // screenDims returns the model's last known terminal size, falling back to
 // the same defaults gridDims() uses when no tea.WindowSizeMsg has arrived
 // yet (e.g. in tests calling View() directly).
@@ -1682,6 +1751,10 @@ func (m model) View() string {
 
 	if m.datePicking {
 		view = popup.Overlay(view, m.datePick.View(), width, height)
+	}
+
+	if m.pickingProject {
+		view = popup.Overlay(view, m.projectPicker.View(), width, height)
 	}
 
 	if msg, ok := m.popups.Current(); ok {

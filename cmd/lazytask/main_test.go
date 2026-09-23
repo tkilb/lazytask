@@ -1492,6 +1492,79 @@ func TestModelUpdate_DatePickingEnterInvalidShowsWarningAndStaysOpen(t *testing.
 	assert.Equal(t, popup.Warning, msg.Severity)
 }
 
+func TestModelUpdate_PKeyOpensProjectPicker(t *testing.T) {
+	m := model{
+		focus:    focusTasks,
+		reader:   &stubReader{},
+		projects: projects.New().SetProjects([]string{"work", "home"}),
+	}
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	m = newModel.(model)
+	assert.True(t, m.pickingProject)
+	label, ok := m.projectPicker.Selected()
+	require.True(t, ok)
+	assert.Equal(t, projects.AllLabel, label)
+}
+
+func TestModelUpdate_ProjectPickingEscCancelsWithoutChangingFilter(t *testing.T) {
+	m := model{
+		pickingProject: true,
+		projectPicker:  projects.New().SetProjects([]string{"work", "home"}),
+		filter:         filterState{},
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.pickingProject)
+	assert.Nil(t, cmd)
+	assert.Nil(t, m.filter.project)
+}
+
+func TestModelUpdate_ProjectPickingEnterAppliesSelectedFilter(t *testing.T) {
+	reader := &stubReader{}
+	m := model{
+		pickingProject: true,
+		projectPicker:  projects.New().SetProjects([]string{"work", "home"}),
+		projects:       projects.New().SetProjects([]string{"work", "home"}),
+		reader:         reader,
+		filter:         filterState{},
+	}
+
+	// Move the picker's cursor down twice: past AllLabel, NoneLabel, to
+	// "work".
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+	newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.pickingProject)
+	require.NotNil(t, cmd)
+	require.NotNil(t, m.filter.project)
+	assert.Equal(t, "work", *m.filter.project)
+
+	label, ok := m.projects.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "work", label)
+}
+
+func TestModelUpdate_ProjectPickingEnterSameFilterNoOp(t *testing.T) {
+	m := model{
+		pickingProject: true,
+		projectPicker:  projects.New().SetProjects([]string{"work", "home"}),
+		projects:       projects.New().SetProjects([]string{"work", "home"}),
+		filter:         filterState{},
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.pickingProject)
+	assert.Nil(t, cmd)
+	assert.Nil(t, m.filter.project)
+}
+
 func TestModelUpdate_TaskDueSetMsgTriggersRefreshAndKeepsSelection(t *testing.T) {
 	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
 	m := model{reader: reader, list: tasklist.New(nil)}

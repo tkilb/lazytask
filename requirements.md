@@ -117,7 +117,7 @@ than a human would spend minutes:
   flexible US/international absolute dates — e.g. `3/14`, `3-14`, `3.14`,
   `3-14-2026`, `2026-03-14` — with optional leading zeros and future-only
   rollover for the 2-part MM-DD shorthand.)
-- [ ] 'p' from the tasks panel will open a popup for a quick project picker for filtering
+- [x] 'p' from the tasks panel will open a popup for a quick project picker for filtering
 - [ ] 'P' from the tasks panel will open a popup for project re-assign, allow for existing project to be selected from a list
   or a new one to be keyed in
   or a new one to be keyed in

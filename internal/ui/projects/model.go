@@ -43,6 +43,7 @@ type Model struct {
 	width    int
 	height   int
 	focused  bool
+	title    string
 }
 
 // Counts carries the number of tasks behind each selectable entry, so the
@@ -61,9 +62,25 @@ type Counts struct {
 	ByProject map[string]int
 }
 
+// defaultTitle is the panel title shown in the grid, with the "3" number
+// key hint lazygit-style panels embed in their border. SetTitle overrides
+// this for callers rendering the same Model as a standalone popup instead
+// (e.g. the "p" quick project-filter popup), where the number key hint
+// isn't meaningful.
+const defaultTitle = "3 Projects"
+
 // New constructs an empty Model.
 func New() Model {
 	return Model{}
+}
+
+// SetTitle overrides the panel title embedded in View's top border,
+// replacing the default "3 Projects" grid-panel title. Used by callers
+// rendering this Model standalone (e.g. as a popup) where the "3" number
+// key hint doesn't apply.
+func (m Model) SetTitle(title string) Model {
+	m.title = title
+	return m
 }
 
 // SetProjects replaces the underlying distinct project names (expected
@@ -216,7 +233,11 @@ func (m Model) View() string {
 	if len(entries) > 0 {
 		footer = fmt.Sprintf("%d of %d", m.cursor+1, len(entries))
 	}
-	return panel.Frame("3 Projects", body, innerWidth, innerHeight, m.focused, footer)
+	title := m.title
+	if title == "" {
+		title = defaultTitle
+	}
+	return panel.Frame(title, body, innerWidth, innerHeight, m.focused, footer)
 }
 
 // countFieldWidth is the fixed width reserved for the "(N)" count field
