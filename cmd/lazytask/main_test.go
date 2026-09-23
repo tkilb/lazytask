@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,7 @@ import (
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
+	"github.com/tkilb/lazytask/internal/ui/datepick"
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
@@ -136,6 +138,22 @@ func (s *stubPrioritizer) SetPriority(ctx context.Context, id, priority string) 
 	s.call++
 	s.ids = append(s.ids, id)
 	s.priorities = append(s.priorities, priority)
+	return s.err
+}
+
+// stubDueSetter is a test double for TaskDueSetter, avoiding any real
+// `task` process invocation.
+type stubDueSetter struct {
+	err  error
+	ids  []string
+	dues []string
+	call int
+}
+
+func (s *stubDueSetter) SetDue(ctx context.Context, id, due string) error {
+	s.call++
+	s.ids = append(s.ids, id)
+	s.dues = append(s.dues, due)
 	return s.err
 }
 
@@ -1385,6 +1403,114 @@ func TestModelUpdate_TaskPriorityErrMsgSetsErr(t *testing.T) {
 	wantErr := errors.New("set priority failed")
 
 	newModel, cmd := m.Update(taskPriorityErrMsg{err: wantErr})
+	m = newModel.(model)
+	assertErrPopup(t, m, wantErr)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_DKeyOpensDatePicker(t *testing.T) {
+	m := model{
+		focus:    focusTasks,
+		duer:     &stubDueSetter{},
+		datePick: datepick.New(),
+		list:     tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}),
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	m = newModel.(model)
+	assert.True(t, m.datePicking)
+	assert.True(t, m.datePick.Focused())
+	assert.NotNil(t, cmd)
+}
+
+func TestModelUpdate_DueDateKeyNoSelectionNoOp(t *testing.T) {
+	m := model{focus: focusTasks, duer: &stubDueSetter{}, datePick: datepick.New(), list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	m = newModel.(model)
+	assert.False(t, m.datePicking)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_DatePickingEscCancels(t *testing.T) {
+	m := model{datePicking: true, datePick: datepick.New().Focus()}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.datePicking)
+	assert.False(t, m.datePick.Focused())
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_DatePickingEnterValidCordCallsSetDue(t *testing.T) {
+	duer := &stubDueSetter{}
+	m := model{
+		datePicking: true,
+		datePick:    datepick.New().Focus(),
+		duer:        duer,
+		list:        tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk"}}),
+	}
+
+	for _, r := range "2d" {
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newModel.(model)
+	}
+	require.Equal(t, "2d", m.datePick.Value())
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.datePicking)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	dueMsg, ok := msg.(taskDueSetMsg)
+	require.True(t, ok)
+	assert.Equal(t, 1, dueMsg.id)
+	require.Len(t, duer.ids, 1)
+	assert.Equal(t, "abc-123", duer.ids[0])
+
+	got, err := time.Parse(taskDueLayout, duer.dues[0])
+	require.NoError(t, err)
+	want := time.Now().AddDate(0, 0, 2)
+	assert.WithinDuration(t, want, got, 5*time.Second)
+}
+
+func TestModelUpdate_DatePickingEnterInvalidShowsWarningAndStaysOpen(t *testing.T) {
+	m := model{
+		datePicking: true,
+		datePick:    datepick.New().Focus(),
+		duer:        &stubDueSetter{},
+		list:        tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.True(t, m.datePicking)
+	assert.Nil(t, cmd)
+	msg, ok := m.popups.Current()
+	require.True(t, ok)
+	assert.Equal(t, popup.Warning, msg.Severity)
+}
+
+func TestModelUpdate_TaskDueSetMsgTriggersRefreshAndKeepsSelection(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
+	m := model{reader: reader, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(taskDueSetMsg{id: 1})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, 1, m.pendingFocusID)
+
+	loaded, ok := findTasksLoaded(runBatch(cmd))
+	assert.True(t, ok)
+	assert.Equal(t, reader.tasks, loaded.tasks)
+}
+
+func TestModelUpdate_TaskDueErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("set due failed")
+
+	newModel, cmd := m.Update(taskDueErrMsg{err: wantErr})
 	m = newModel.(model)
 	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)

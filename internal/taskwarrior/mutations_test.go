@@ -90,6 +90,13 @@ func TestClient_SetUrgencyOffset_EmptyID(t *testing.T) {
 	assert.Contains(t, err.Error(), "must not be empty")
 }
 
+func TestClient_SetDue_EmptyID(t *testing.T) {
+	c := NewClient()
+	err := c.SetDue(context.Background(), "  ", "20240115T140000Z")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
 func TestClient_Import_EmptyData(t *testing.T) {
 	c := NewClient()
 	err := c.Import(context.Background(), []byte("   "))
@@ -218,4 +225,14 @@ func TestClient_Mutations_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, prioritized, 1)
 	assert.Equal(t, "H", prioritized[0].Priority)
+
+	// 7. SetDue updates the due field, in Taskwarrior's combined UTC
+	// export format.
+	err = client.SetDue(ctx, fmt.Sprintf("%d", prioID), "20240115T140000Z")
+	require.NoError(t, err)
+
+	dued, err := client.Export(ctx, "status:pending")
+	require.NoError(t, err)
+	require.Len(t, dued, 1)
+	assert.Equal(t, "20240115T140000Z", dued[0].Due)
 }

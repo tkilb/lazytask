@@ -17,6 +17,7 @@ import (
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
+	"github.com/tkilb/lazytask/internal/ui/datepick"
 	"github.com/tkilb/lazytask/internal/ui/panel"
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
@@ -138,6 +139,7 @@ var tasksLocalBindings = []statusbar.Binding{
 	{Key: "x", Label: "delete"},
 	{Key: "e", Label: "edit"},
 	{Key: "h/m/l", Label: "priority"},
+	{Key: "D", Label: "due date"},
 	{Key: "ctrl+j/k", Label: "reorder"},
 }
 
@@ -251,6 +253,13 @@ type TaskReRanker interface {
 	SetUrgencyOffset(ctx context.Context, id string, rank float64) error
 }
 
+// TaskDueSetter is the subset of the taskwarrior client needed to set a
+// task's due date, so it can be stubbed out in tests without shelling out
+// to the real `task` binary.
+type TaskDueSetter interface {
+	SetDue(ctx context.Context, id, due string) error
+}
+
 // tasksLoadedMsg carries the result of a successful task fetch.
 type tasksLoadedMsg struct {
 	tasks []taskwarrior.Task
@@ -346,6 +355,20 @@ type taskPriorityErrMsg struct {
 	err error
 }
 
+// taskDueSetMsg carries the result of a successful SetDue call, plus the
+// undo.Action that reverses it (see setDueTask) and the id of the task
+// whose due date changed, so the cursor can be kept on it after the
+// following refresh re-sorts the list by urgency.
+type taskDueSetMsg struct {
+	id     int
+	action undo.Action
+}
+
+// taskDueErrMsg carries the error from a failed SetDue call.
+type taskDueErrMsg struct {
+	err error
+}
+
 // taskReorderedMsg carries the result of a successful manual-reorder
 // SetUrgencyOffset call, plus the undo.Action that reverses it (see
 // reorderTask) and the id of the task whose rank changed, so the cursor
@@ -425,6 +448,7 @@ type model struct {
 	importer       TaskImporter
 	prioritizer    TaskPrioritizer
 	reranker       TaskReRanker
+	duer           TaskDueSetter
 	list           tasklist.Model
 	add            addform.Model
 	adding         bool
@@ -438,6 +462,8 @@ type model struct {
 	renameTo       string
 	renameMerging  bool
 	renameConfirm  bool
+	datePicking    bool
+	datePick       datepick.Model
 	popups         popup.Model
 	quitting       bool
 	pendingFocusID int
@@ -476,8 +502,10 @@ func initialModel() model {
 		importer:      client,
 		prioritizer:   client,
 		reranker:      client,
+		duer:          client,
 		list:          tasklist.New(nil).SetFocused(true),
 		add:           addform.New(),
+		datePick:      datepick.New(),
 		projects:      projects.New(),
 		knownProjects: make(map[string]struct{}),
 		filter:        filterState{project: persisted.Project},
@@ -816,6 +844,36 @@ func setPriorityTask(prioritizer TaskPrioritizer, task taskwarrior.Task, priorit
 	}
 }
 
+// taskDueLayout is Taskwarrior's combined UTC export/import format for
+// date attributes (e.g. "20240115T140000Z"), as confirmed by `task
+// export`; using this rather than a locale-dependent format means SetDue
+// is interpreted the same way regardless of the user's configured
+// dateformat.
+const taskDueLayout = "20060102T150405Z"
+
+// setDueTask returns a tea.Cmd that sets task's due date to due via duer,
+// returning an undo.Action that reverses it back to the task's prior due
+// date (which may be empty, clearing it back to "no due date").
+func setDueTask(duer TaskDueSetter, task taskwarrior.Task, due time.Time) tea.Cmd {
+	return func() tea.Msg {
+		id := taskID(task)
+		prior := task.Due
+		formatted := due.UTC().Format(taskDueLayout)
+		if err := duer.SetDue(context.Background(), id, formatted); err != nil {
+			return taskDueErrMsg{err: err}
+		}
+		return taskDueSetMsg{id: task.ID, action: undo.Action{
+			Description: fmt.Sprintf("set task %s due date to %s", id, formatted),
+			Undo: func() error {
+				return duer.SetDue(context.Background(), id, prior)
+			},
+			Redo: func() error {
+				return duer.SetDue(context.Background(), id, formatted)
+			},
+		}}
+	}
+}
+
 // reorderEpsilon is the small offset added past a neighbor's effective
 // urgency (Urgency+UrgencyOffset) when computing a moved task's new UrgencyOffset, so
 // it sorts just past that neighbor without otherwise disturbing the list.
@@ -1003,6 +1061,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.renameConfirm {
 		return m.updateRenameConfirm(msg)
 	}
+	if m.datePicking {
+		return m.updateDatePicking(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1126,6 +1187,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, setPriorityTask(m.prioritizer, task, strings.ToUpper(msg.String()))
 			}
 			return m, nil
+		case "D":
+			if _, ok := m.list.Selected(); ok {
+				m.datePicking = true
+				m.datePick = m.datePick.Focus()
+				return m, m.datePick.Init()
+			}
+			return m, nil
 		case "ctrl+j":
 			if task, ok := m.list.Selected(); ok {
 				if neighbor, ok := m.list.Neighbor(1); ok {
@@ -1209,6 +1277,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingFocusID = msg.id
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskPriorityErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskDueSetMsg:
+		m.undo.Push(msg.action)
+		m.pendingFocusID = msg.id
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+	case taskDueErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskReorderedMsg:
@@ -1474,6 +1549,40 @@ func (m model) updateRenameConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateDatePicking handles messages while the due-date quick-pick popup is
+// focused: entering a cord (e.g. "2d") or an absolute date for the
+// selected task's new due date. An empty or unparseable input surfaces a
+// warning popup and leaves the picker open rather than silently doing
+// nothing, so the user knows why enter didn't submit.
+func (m model) updateDatePicking(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.datePicking = false
+			m.datePick = m.datePick.Blur()
+			return m, nil
+		case "enter":
+			due, ok := m.datePick.Resolved()
+			if !ok {
+				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Enter a valid cord (2d, 1w, 2b) or date (YYYY-MM-DD)."})
+				return m, nil
+			}
+			task, ok := m.list.Selected()
+			m.datePicking = false
+			m.datePick = m.datePick.Blur()
+			if !ok {
+				return m, nil
+			}
+			return m, setDueTask(m.duer, task, due)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.datePick, cmd = m.datePick.Update(msg)
+	return m, cmd
+}
+
 // screenDims returns the model's last known terminal size, falling back to
 // the same defaults gridDims() uses when no tea.WindowSizeMsg has arrived
 // yet (e.g. in tests calling View() directly).
@@ -1569,6 +1678,10 @@ func (m model) View() string {
 			text := fmt.Sprintf("Rename project %q to %q? This updates every task in this project, including done/deleted ones.", m.renameFrom, m.renameTo)
 			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
 		}
+	}
+
+	if m.datePicking {
+		view = popup.Overlay(view, m.datePick.View(), width, height)
 	}
 
 	if msg, ok := m.popups.Current(); ok {

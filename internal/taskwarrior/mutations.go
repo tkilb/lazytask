@@ -20,6 +20,7 @@ type TaskMutator interface {
 	Import(ctx context.Context, data []byte) error
 	SetPriority(ctx context.Context, id, priority string) error
 	SetUrgencyOffset(ctx context.Context, id string, rank float64) error
+	SetDue(ctx context.Context, id, due string) error
 }
 
 // createdTaskRE matches Taskwarrior's "Created task <id>." confirmation line.
@@ -132,6 +133,20 @@ func (c *Client) SetUrgencyOffset(ctx context.Context, id string, rank float64) 
 		return fmt.Errorf("id must not be empty")
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", fmt.Sprintf("urgencyoffset:%g", rank))
+	return err
+}
+
+// SetDue sets the due date of the task identified by id (a Taskwarrior ID
+// or UUID) to due, which must already be formatted in Taskwarrior's
+// combined UTC export format (e.g. "20240115T140000Z", matching
+// Task.Due/what `task export` produces) so it's interpreted consistently
+// regardless of the user's configured dateformat. Pass an empty string to
+// clear the due date.
+func (c *Client) SetDue(ctx context.Context, id, due string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "due:"+due)
 	return err
 }
 

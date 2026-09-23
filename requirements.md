@@ -110,15 +110,19 @@ than a human would spend minutes:
 
 ### Phase 6 - Advanced Wizards
 
-- Make an new component that will allow the user to quickly pick a due date.
+- [x] Make an new component that will allow the user to quickly pick a due date.
   The idea is we want a cord like '2d' for two days from now and '1w' for on week from now.
   '2b' will be two business days from now, assume Sat and Sun are not business days.
-- 'p' from the edit panel will open a popup for a quick project picker for filtering
-- 'P' from the edit panel will open a popup for project re-assign, allow for existing project to be selected from a list
+  (Implemented in `internal/dateparse` + `internal/ui/datepick`; also accepts
+  flexible US/international absolute dates — e.g. `3/14`, `3-14`, `3.14`,
+  `3-14-2026`, `2026-03-14` — with optional leading zeros and future-only
+  rollover for the 2-part MM-DD shorthand.)
+- [ ] 'p' from the tasks panel will open a popup for a quick project picker for filtering
+- [ ] 'P' from the tasks panel will open a popup for project re-assign, allow for existing project to be selected from a list
   or a new one to be keyed in
   or a new one to be keyed in
-- 'D' will make use of the date component for the selected task. cord shortcuts may be used for a quick date or have the option for a custom date key in
-- Add will now have additional fields for project, priority and due date.
+- [x] 'D' will make use of the date component for the selected task. cord shortcuts may be used for a quick date or have the option for a custom date key in
+- [ ] Add will now have additional fields for project, priority and due date.
 
 ### Phase 7 — Tags
 
@@ -126,9 +130,9 @@ than a human would spend minutes:
   existing filter-state infra: lists distinct tags, with an `*any*` entry
   first (wrapped in `*`), selecting a tag sets a `+tag` filter, sourced from
   the same unfiltered query as Projects. Pending sign-off/implementation
-- 'T' from the edit panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
+- 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
   If keyed in, there will be a comma delimited list and the mode will be replacement instead.
-- 't' from the edit panel will open a popup for a quick tag picker for filtering
+- 't' from the tasks panel will open a popup for a quick tag picker for filtering
 - Add tags to the add form, should come before due date
 
 ### Phase 8 — Low Priority
