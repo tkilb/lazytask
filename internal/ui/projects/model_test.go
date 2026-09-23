@@ -44,6 +44,18 @@ func TestModel_SelectedWithNoProjects(t *testing.T) {
 	assert.Equal(t, AllLabel, label, "the special entries are always present")
 }
 
+func TestModel_ReassignModeSwapsSpecialEntries(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"}).SetReassignMode(true)
+
+	wantOrder := []string{NoneLabel, NewProjectLabel, "home", "work"}
+	for i, want := range wantOrder {
+		label, ok := m.Selected()
+		require.True(t, ok)
+		assert.Equal(t, want, label, "entry %d", i)
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+}
+
 func TestModel_ViewShowsCountSuffix(t *testing.T) {
 	m := New().SetProjects([]string{"chores", "work"}).SetCounts(Counts{
 		All:       10,

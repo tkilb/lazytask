@@ -21,6 +21,7 @@ type TaskMutator interface {
 	SetPriority(ctx context.Context, id, priority string) error
 	SetUrgencyOffset(ctx context.Context, id string, rank float64) error
 	SetDue(ctx context.Context, id, due string) error
+	SetProject(ctx context.Context, id, project string) error
 }
 
 // createdTaskRE matches Taskwarrior's "Created task <id>." confirmation line.
@@ -147,6 +148,17 @@ func (c *Client) SetDue(ctx context.Context, id, due string) error {
 		return fmt.Errorf("id must not be empty")
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "due:"+due)
+	return err
+}
+
+// SetProject sets the project of the task identified by id (a Taskwarrior
+// ID or UUID) to project. Pass an empty string to clear the project
+// (equivalent to `task <id> modify project:`).
+func (c *Client) SetProject(ctx context.Context, id, project string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "project:"+project)
 	return err
 }
 

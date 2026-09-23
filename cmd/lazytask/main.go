@@ -261,6 +261,13 @@ type TaskDueSetter interface {
 	SetDue(ctx context.Context, id, due string) error
 }
 
+// TaskProjectSetter is the subset of the taskwarrior client needed to
+// reassign a task's project, so it can be stubbed out in tests without
+// shelling out to the real `task` binary.
+type TaskProjectSetter interface {
+	SetProject(ctx context.Context, id, project string) error
+}
+
 // tasksLoadedMsg carries the result of a successful task fetch.
 type tasksLoadedMsg struct {
 	tasks []taskwarrior.Task
@@ -370,6 +377,20 @@ type taskDueErrMsg struct {
 	err error
 }
 
+// taskProjectSetMsg carries the result of a successful SetProject call,
+// plus the undo.Action that reverses it (see setProjectTask) and the id of
+// the task whose project changed, so the cursor can be kept on it after
+// the following refresh.
+type taskProjectSetMsg struct {
+	id     int
+	action undo.Action
+}
+
+// taskProjectErrMsg carries the error from a failed SetProject call.
+type taskProjectErrMsg struct {
+	err error
+}
+
 // taskReorderedMsg carries the result of a successful manual-reorder
 // SetUrgencyOffset call, plus the undo.Action that reverses it (see
 // reorderTask) and the id of the task whose rank changed, so the cursor
@@ -450,6 +471,7 @@ type model struct {
 	prioritizer    TaskPrioritizer
 	reranker       TaskReRanker
 	duer           TaskDueSetter
+	projecter      TaskProjectSetter
 	list           tasklist.Model
 	add            addform.Model
 	adding         bool
@@ -467,6 +489,10 @@ type model struct {
 	datePick       datepick.Model
 	pickingProject bool
 	projectPicker  projects.Model
+	reassigning    bool
+	reassignPicker projects.Model
+	reassignTyping bool
+	reassignInput  addform.Model
 	popups         popup.Model
 	quitting       bool
 	pendingFocusID int
@@ -496,23 +522,25 @@ func initialModel() model {
 	cancel()
 	persisted := config.Load()
 	return model{
-		reader:        client,
-		adder:         client,
-		doner:         client,
-		deleter:       client,
-		restorer:      client,
-		purger:        client,
-		importer:      client,
-		prioritizer:   client,
-		reranker:      client,
-		duer:          client,
-		list:          tasklist.New(nil).SetFocused(true),
-		add:           addform.New(),
-		datePick:      datepick.New(),
-		projects:      projects.New(),
-		projectPicker: projects.New(),
-		knownProjects: make(map[string]struct{}),
-		filter:        filterState{project: persisted.Project},
+		reader:         client,
+		adder:          client,
+		doner:          client,
+		deleter:        client,
+		restorer:       client,
+		purger:         client,
+		importer:       client,
+		prioritizer:    client,
+		reranker:       client,
+		duer:           client,
+		projecter:      client,
+		list:           tasklist.New(nil).SetFocused(true),
+		add:            addform.New(),
+		datePick:       datepick.New(),
+		projects:       projects.New(),
+		projectPicker:  projects.New(),
+		reassignPicker: projects.New(),
+		knownProjects:  make(map[string]struct{}),
+		filter:         filterState{project: persisted.Project},
 	}
 }
 
@@ -878,6 +906,29 @@ func setDueTask(duer TaskDueSetter, task taskwarrior.Task, due time.Time) tea.Cm
 	}
 }
 
+// setProjectTask returns a tea.Cmd that reassigns task's project to
+// project (a real project name, or "" to clear it back to project-less)
+// via projecter, returning an undo.Action that reverses it back to the
+// task's prior project.
+func setProjectTask(projecter TaskProjectSetter, task taskwarrior.Task, project string) tea.Cmd {
+	return func() tea.Msg {
+		id := taskID(task)
+		prior := task.Project
+		if err := projecter.SetProject(context.Background(), id, project); err != nil {
+			return taskProjectErrMsg{err: err}
+		}
+		return taskProjectSetMsg{id: task.ID, action: undo.Action{
+			Description: fmt.Sprintf("set task %s project to %q", id, project),
+			Undo: func() error {
+				return projecter.SetProject(context.Background(), id, prior)
+			},
+			Redo: func() error {
+				return projecter.SetProject(context.Background(), id, project)
+			},
+		}}
+	}
+}
+
 // reorderEpsilon is the small offset added past a neighbor's effective
 // urgency (Urgency+UrgencyOffset) when computing a moved task's new UrgencyOffset, so
 // it sorts just past that neighbor without otherwise disturbing the list.
@@ -1071,6 +1122,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.pickingProject {
 		return m.updateProjectPicking(msg)
 	}
+	if m.reassigning {
+		return m.updateReassigning(msg)
+	}
+	if m.reassignTyping {
+		return m.updateReassignTyping(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1208,6 +1265,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.projectPicker, cmd = m.projectPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
 			m.pickingProject = true
 			return m, cmd
+		case "P":
+			if _, ok := m.list.Selected(); ok {
+				w, h := projectPickerSize(len(m.projects.Projects()) + 2)
+				m.reassignPicker = m.projects.SetFocused(true).SetTitle("Reassign Project").SetReassignMode(true)
+				var cmd tea.Cmd
+				m.reassignPicker, cmd = m.reassignPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
+				m.reassigning = true
+				return m, cmd
+			}
+			return m, nil
 		case "ctrl+j":
 			if task, ok := m.list.Selected(); ok {
 				if neighbor, ok := m.list.Neighbor(1); ok {
@@ -1298,6 +1365,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingFocusID = msg.id
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskDueErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskProjectSetMsg:
+		m.undo.Push(msg.action)
+		m.pendingFocusID = msg.id
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+	case taskProjectErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskReorderedMsg:
@@ -1652,6 +1726,79 @@ func (m model) updateProjectPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateReassigning handles messages while the task project-reassign popup
+// (opened via "P" from the Tasks panel) is active: navigating/selecting an
+// existing project (or NoneLabel, to clear the task's project) applies
+// immediately on "enter", while selecting NewProjectLabel instead
+// transitions to updateReassignTyping to key in a brand new project name.
+func (m model) updateReassigning(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.reassigning = false
+			return m, nil
+		case "enter":
+			label, ok := m.reassignPicker.Selected()
+			if !ok {
+				return m, nil
+			}
+			if label == projects.NewProjectLabel {
+				m.reassigning = false
+				m.reassignTyping = true
+				m.reassignInput = addform.NewNamed("Reassign Project", "Press <enter> to assign, <esc> to cancel", "New project name...").Focus()
+				return m, m.reassignInput.Init()
+			}
+			m.reassigning = false
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			project := label
+			if label == projects.NoneLabel {
+				project = ""
+			}
+			return m, setProjectTask(m.projecter, task, project)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.reassignPicker, cmd = m.reassignPicker.Update(msg)
+	return m, cmd
+}
+
+// updateReassignTyping handles messages while the "key in a new project
+// name" input (reached via NewProjectLabel in updateReassigning) is
+// focused. Leading/trailing whitespace is trimmed before use; an empty
+// name is a silent no-op back to the Tasks panel.
+func (m model) updateReassignTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.reassignTyping = false
+			m.reassignInput = m.reassignInput.Blur()
+			return m, nil
+		case "enter":
+			project := strings.TrimSpace(m.reassignInput.Value())
+			m.reassignTyping = false
+			m.reassignInput = m.reassignInput.Blur()
+			if project == "" {
+				return m, nil
+			}
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			return m, setProjectTask(m.projecter, task, project)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.reassignInput, cmd = m.reassignInput.Update(msg)
+	return m, cmd
+}
+
 // screenDims returns the model's last known terminal size, falling back to
 // the same defaults gridDims() uses when no tea.WindowSizeMsg has arrived
 // yet (e.g. in tests calling View() directly).
@@ -1755,6 +1902,14 @@ func (m model) View() string {
 
 	if m.pickingProject {
 		view = popup.Overlay(view, m.projectPicker.View(), width, height)
+	}
+
+	if m.reassigning {
+		view = popup.Overlay(view, m.reassignPicker.View(), width, height)
+	}
+
+	if m.reassignTyping {
+		view = popup.Overlay(view, m.reassignInput.View(), width, height)
 	}
 
 	if msg, ok := m.popups.Current(); ok {

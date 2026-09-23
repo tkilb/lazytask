@@ -97,6 +97,13 @@ func TestClient_SetDue_EmptyID(t *testing.T) {
 	assert.Contains(t, err.Error(), "must not be empty")
 }
 
+func TestClient_SetProject_EmptyID(t *testing.T) {
+	c := NewClient()
+	err := c.SetProject(context.Background(), "  ", "home")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
 func TestClient_Import_EmptyData(t *testing.T) {
 	c := NewClient()
 	err := c.Import(context.Background(), []byte("   "))
@@ -235,4 +242,22 @@ func TestClient_Mutations_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dued, 1)
 	assert.Equal(t, "20240115T140000Z", dued[0].Due)
+
+	// 8. SetProject updates the project field, and clears it back to
+	// empty when passed "".
+	err = client.SetProject(ctx, fmt.Sprintf("%d", prioID), "home")
+	require.NoError(t, err)
+
+	projected, err := client.Export(ctx, "status:pending")
+	require.NoError(t, err)
+	require.Len(t, projected, 1)
+	assert.Equal(t, "home", projected[0].Project)
+
+	err = client.SetProject(ctx, fmt.Sprintf("%d", prioID), "")
+	require.NoError(t, err)
+
+	unprojected, err := client.Export(ctx, "status:pending")
+	require.NoError(t, err)
+	require.Len(t, unprojected, 1)
+	assert.Empty(t, unprojected[0].Project)
 }

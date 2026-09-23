@@ -20,6 +20,10 @@ const (
 	// AllLabel clears the project filter entirely (no `project:` filter
 	// applied at all).
 	AllLabel = "(all)"
+	// NewProjectLabel, in reassign mode (see SetReassignMode), selects the
+	// "key in a new project name" entry in place of AllLabel (which has no
+	// meaning when reassigning a single task's project).
+	NewProjectLabel = "+ New Project"
 
 	// minPanelWidth is used when no tea.WindowSizeMsg has been received yet.
 	minPanelWidth = 20
@@ -37,13 +41,14 @@ var selectedRowStyle = lipgloss.NewStyle().Background(panel.SelectedRowBackgroun
 // change/clear that filter) and pass the already-deduplicated, sorted
 // names to SetProjects.
 type Model struct {
-	projects []string
-	counts   Counts
-	cursor   int
-	width    int
-	height   int
-	focused  bool
-	title    string
+	projects     []string
+	counts       Counts
+	cursor       int
+	width        int
+	height       int
+	focused      bool
+	title        string
+	reassignMode bool
 }
 
 // Counts carries the number of tasks behind each selectable entry, so the
@@ -80,6 +85,27 @@ func New() Model {
 // key hint doesn't apply.
 func (m Model) SetTitle(title string) Model {
 	m.title = title
+	return m
+}
+
+// SetReassignMode switches the panel between its default entry set (the
+// AllLabel/NoneLabel special entries pinned to the top, used by the
+// Projects grid panel and the "p" quick project-filter popup) and a
+// reassign-picker entry set (NoneLabel + NewProjectLabel), used when this
+// same Model is reused as the "P" task project-reassign popup: there is no
+// "(all)" project to reassign a single task to, but there does need to be
+// a way to key in a brand new project name rather than picking an existing
+// one. The cursor is clamped to stay within bounds of the resulting entry
+// list, same as SetProjects.
+func (m Model) SetReassignMode(reassign bool) Model {
+	m.reassignMode = reassign
+	entries := m.entries()
+	if m.cursor >= len(entries) {
+		m.cursor = len(entries) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
 	return m
 }
 
@@ -138,11 +164,17 @@ func (m Model) HasLabel(label string) bool {
 	return false
 }
 
-// entries returns the full selectable list: the AllLabel/NoneLabel special
-// entries pinned to the top, followed by the real project names.
+// entries returns the full selectable list: the two special entries
+// pinned to the top (AllLabel/NoneLabel normally, or NoneLabel/
+// NewProjectLabel in reassign mode — see SetReassignMode), followed by the
+// real project names.
 func (m Model) entries() []string {
 	entries := make([]string, 0, len(m.projects)+2)
-	entries = append(entries, AllLabel, NoneLabel)
+	if m.reassignMode {
+		entries = append(entries, NoneLabel, NewProjectLabel)
+	} else {
+		entries = append(entries, AllLabel, NoneLabel)
+	}
 	entries = append(entries, m.projects...)
 	return entries
 }

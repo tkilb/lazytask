@@ -111,16 +111,16 @@ than a human would spend minutes:
 ### Phase 6 - Advanced Wizards
 
 - [x] Make an new component that will allow the user to quickly pick a due date.
-  The idea is we want a cord like '2d' for two days from now and '1w' for on week from now.
-  '2b' will be two business days from now, assume Sat and Sun are not business days.
-  (Implemented in `internal/dateparse` + `internal/ui/datepick`; also accepts
-  flexible US/international absolute dates — e.g. `3/14`, `3-14`, `3.14`,
-  `3-14-2026`, `2026-03-14` — with optional leading zeros and future-only
-  rollover for the 2-part MM-DD shorthand.)
+      The idea is we want a cord like '2d' for two days from now and '1w' for on week from now.
+      '2b' will be two business days from now, assume Sat and Sun are not business days.
+      (Implemented in `internal/dateparse` + `internal/ui/datepick`; also accepts
+      flexible US/international absolute dates — e.g. `3/14`, `3-14`, `3.14`,
+      `3-14-2026`, `2026-03-14` — with optional leading zeros and future-only
+      rollover for the 2-part MM-DD shorthand.)
 - [x] 'p' from the tasks panel will open a popup for a quick project picker for filtering
-- [ ] 'P' from the tasks panel will open a popup for project re-assign, allow for existing project to be selected from a list
-  or a new one to be keyed in
-  or a new one to be keyed in
+- [x] 'P' from the tasks panel will open a popup for project re-assign, allow for existing project to be selected from a list
+      or a new one to be keyed in
+      or a new one to be keyed in
 - [x] 'D' will make use of the date component for the selected task. cord shortcuts may be used for a quick date or have the option for a custom date key in
 - [ ] Add will now have additional fields for project, priority and due date.
 
