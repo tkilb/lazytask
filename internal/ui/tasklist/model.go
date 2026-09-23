@@ -115,18 +115,27 @@ func (m Model) SetTasks(tasks []taskwarrior.Task) Model {
 }
 
 // sortByUrgency returns a copy of tasks ordered by taskwarrior's computed
-// urgency field, highest first. Taskwarrior's default urgency coefficients
-// already weight priority heavily, so this alone gives an urgency-first,
-// priority-as-largest-factor ordering without lazytask needing its own
-// weighting logic. The sort is stable so ties (including all-zero urgency,
-// e.g. in tests that don't set it) keep their original relative order.
+// urgency field plus each task's manual UrgencyOffset (see
+// Task.UrgencyOffset), highest first. Taskwarrior's default urgency
+// coefficients already weight priority heavily, so this alone gives an
+// urgency-first, priority-as-largest-factor ordering without lazytask
+// needing its own weighting logic; UrgencyOffset lets Ctrl+j/Ctrl+k nudge a
+// task's position within that ordering. The sort is stable so ties
+// (including all-zero urgency, e.g. in tests that don't set it) keep their
+// original relative order.
 func sortByUrgency(tasks []taskwarrior.Task) []taskwarrior.Task {
 	sorted := make([]taskwarrior.Task, len(tasks))
 	copy(sorted, tasks)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Urgency > sorted[j].Urgency
+		return effectiveUrgency(sorted[i]) > effectiveUrgency(sorted[j])
 	})
 	return sorted
+}
+
+// effectiveUrgency is the sort key used by sortByUrgency: taskwarrior's
+// computed Urgency plus the task's manual UrgencyOffset.
+func effectiveUrgency(t taskwarrior.Task) float64 {
+	return t.Urgency + t.UrgencyOffset
 }
 
 // Selected returns the currently selected task and true, or a zero Task and
@@ -149,6 +158,19 @@ func (m Model) SelectID(id int) Model {
 		}
 	}
 	return m
+}
+
+// Neighbor returns the task adjacent to the currently selected one in the
+// list's current sorted order, in the direction of delta (-1 for the task
+// immediately above, +1 for the task immediately below), and true if such a
+// neighbor exists. Used by the Ctrl+j/Ctrl+k manual-reorder keys to find
+// which task's effective urgency the selected task should move past.
+func (m Model) Neighbor(delta int) (taskwarrior.Task, bool) {
+	i := m.cursor + delta
+	if i < 0 || i >= len(m.tasks) {
+		return taskwarrior.Task{}, false
+	}
+	return m.tasks[i], true
 }
 
 // SetFocused records whether the Tasks panel currently has focus in the

@@ -111,3 +111,39 @@ func TestClient_Export_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, emptyFilterTasks)
 }
+
+func TestClient_EnsureUDA_Integration(t *testing.T) {
+	if _, err := exec.LookPath("task"); err != nil {
+		t.Skip("task CLI not found in PATH; skipping integration test")
+	}
+
+	tempDir := t.TempDir()
+	taskRC := filepath.Join(tempDir, ".taskrc")
+	taskData := filepath.Join(tempDir, "data")
+
+	err := os.WriteFile(taskRC, []byte("confirmation=off\n"), 0600)
+	require.NoError(t, err)
+
+	client := NewClient(
+		WithTaskData(taskData),
+		WithTaskRC(taskRC),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// First call registers the UDA from scratch.
+	require.NoError(t, client.EnsureUDA(ctx))
+
+	id, err := client.Add(ctx, "Buy groceries")
+	require.NoError(t, err)
+	require.NoError(t, client.SetUrgencyOffset(ctx, "1", 2.5))
+
+	tasks, err := client.Export(ctx)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, id, tasks[0].ID)
+	assert.Equal(t, 2.5, tasks[0].UrgencyOffset)
+
+	// Second call is a no-op since the UDA is already configured correctly.
+	require.NoError(t, client.EnsureUDA(ctx))
+}

@@ -139,6 +139,22 @@ func (s *stubPrioritizer) SetPriority(ctx context.Context, id, priority string) 
 	return s.err
 }
 
+// stubReRanker is a test double for TaskReRanker, avoiding any real `task`
+// process invocation.
+type stubReRanker struct {
+	err   error
+	ids   []string
+	ranks []float64
+	call  int
+}
+
+func (s *stubReRanker) SetUrgencyOffset(ctx context.Context, id string, rank float64) error {
+	s.call++
+	s.ids = append(s.ids, id)
+	s.ranks = append(s.ranks, rank)
+	return s.err
+}
+
 // runBatch executes cmd, and if it returns a tea.BatchMsg (e.g. from
 // refreshes that now fetch tasks and projects concurrently via
 // tea.Batch), executes each of the batched sub-commands as well,
@@ -482,17 +498,18 @@ func TestDetailsPanelContent(t *testing.T) {
 	t.Run("shows full task detail", func(t *testing.T) {
 		m := model{list: tasklist.New([]taskwarrior.Task{
 			{
-				ID:          7,
-				UUID:        "abc-123",
-				Description: "Mow lawn",
-				Status:      "pending",
-				Project:     "home",
-				Priority:    "H",
-				Due:         "20260101T000000Z",
-				Entry:       "20250101T000000Z",
-				Modified:    "20250102T000000Z",
-				Tags:        []string{"urgent", "chores"},
-				Urgency:     5.5,
+				ID:            7,
+				UUID:          "abc-123",
+				Description:   "Mow lawn",
+				Status:        "pending",
+				Project:       "home",
+				Priority:      "H",
+				Due:           "20260101T000000Z",
+				Entry:         "20250101T000000Z",
+				Modified:      "20250102T000000Z",
+				Tags:          []string{"urgent", "chores"},
+				Urgency:       5.5,
+				UrgencyOffset: 2.25,
 			},
 		})}
 		content := m.detailsPanelContent()
@@ -505,6 +522,7 @@ func TestDetailsPanelContent(t *testing.T) {
 		assert.Contains(t, content, "Priority:    H")
 		assert.Contains(t, content, "Due:         20260101T000000Z")
 		assert.Contains(t, content, "Urgency:     5.50")
+		assert.Contains(t, content, "Urg.Offset:  2.2500")
 		assert.Contains(t, content, "Entry:       20250101T000000Z")
 		assert.Contains(t, content, "Modified:    20250102T000000Z")
 		assert.NotContains(t, content, "End:")
@@ -1367,6 +1385,86 @@ func TestModelUpdate_TaskPriorityErrMsgSetsErr(t *testing.T) {
 	wantErr := errors.New("set priority failed")
 
 	newModel, cmd := m.Update(taskPriorityErrMsg{err: wantErr})
+	m = newModel.(model)
+	assertErrPopup(t, m, wantErr)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_CtrlJMovesTaskDownPastNeighbor(t *testing.T) {
+	reranker := &stubReRanker{}
+	// Sorted descending by urgency: task 2 (9.0) is selected (cursor 0),
+	// task 1 (5.0) is the neighbor below it.
+	m := model{
+		reranker: reranker,
+		list:     tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "low", Urgency: 5.0}, {ID: 2, UUID: "high", Urgency: 9.0}}),
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	reorderMsg, ok := msg.(taskReorderedMsg)
+	require.True(t, ok)
+	assert.Equal(t, 2, reorderMsg.id)
+	require.Equal(t, []string{"high"}, reranker.ids)
+	// New effective urgency (9.0 no longer applies; rank+urgency) should
+	// land just below neighbor's effective urgency of 5.0.
+	assert.InDelta(t, 5.0-reorderEpsilon-9.0, reranker.ranks[0], 1e-9)
+}
+
+func TestModelUpdate_CtrlKMovesTaskUpPastNeighbor(t *testing.T) {
+	reranker := &stubReRanker{}
+	// Sorted descending by urgency: task 2 (9.0), task 1 (5.0, selected at
+	// cursor 1). Neighbor above is task 2.
+	m := model{
+		reranker: reranker,
+		list:     tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "low", Urgency: 5.0}, {ID: 2, UUID: "high", Urgency: 9.0}}).SelectID(1),
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	reorderMsg, ok := msg.(taskReorderedMsg)
+	require.True(t, ok)
+	assert.Equal(t, 1, reorderMsg.id)
+	require.Equal(t, []string{"low"}, reranker.ids)
+	assert.InDelta(t, 9.0+reorderEpsilon-5.0, reranker.ranks[0], 1e-9)
+}
+
+func TestModelUpdate_CtrlJNoNeighborNoOp(t *testing.T) {
+	m := model{
+		reranker: &stubReRanker{},
+		list:     tasklist.New([]taskwarrior.Task{{ID: 1, Description: "only"}}),
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	m = newModel.(model)
+	assert.Nil(t, cmd)
+}
+
+func TestModelUpdate_TaskReorderedMsgTriggersRefreshAndKeepsSelection(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
+	m := model{reader: reader, list: tasklist.New(nil)}
+
+	newModel, cmd := m.Update(taskReorderedMsg{id: 1})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+	assert.Equal(t, 1, m.pendingFocusID)
+
+	msg := cmd()
+	loaded, ok := msg.(tasksLoadedMsg)
+	require.True(t, ok)
+	assert.Equal(t, reader.tasks, loaded.tasks)
+}
+
+func TestModelUpdate_TaskReorderErrMsgSetsErr(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	wantErr := errors.New("reorder failed")
+
+	newModel, cmd := m.Update(taskReorderErrMsg{err: wantErr})
 	m = newModel.(model)
 	assertErrPopup(t, m, wantErr)
 	assert.Nil(t, cmd)

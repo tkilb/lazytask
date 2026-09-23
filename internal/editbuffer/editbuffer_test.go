@@ -123,13 +123,14 @@ func TestParse_GarbageAfterDividerDoesNotError(t *testing.T) {
 
 func TestApply_PreservesReadOnlyFields(t *testing.T) {
 	original := taskwarrior.Task{
-		ID:       7,
-		UUID:     "abc-123",
-		Status:   "pending",
-		Entry:    "20241201T000000Z",
-		Modified: "20241202T000000Z",
-		End:      "",
-		Urgency:  5.4,
+		ID:            7,
+		UUID:          "abc-123",
+		Status:        "pending",
+		Entry:         "20241201T000000Z",
+		Modified:      "20241202T000000Z",
+		End:           "",
+		Urgency:       5.4,
+		UrgencyOffset: 3.25,
 
 		Description: "old description",
 		Project:     "old project",
@@ -151,6 +152,7 @@ func TestApply_PreservesReadOnlyFields(t *testing.T) {
 	assert.Equal(t, original.Modified, updated.Modified)
 	assert.Equal(t, original.End, updated.End)
 	assert.Equal(t, original.Urgency, updated.Urgency)
+	assert.Equal(t, original.UrgencyOffset, updated.UrgencyOffset)
 
 	assert.Equal(t, fields.Description, updated.Description)
 	assert.Equal(t, fields.Project, updated.Project)
@@ -161,13 +163,14 @@ func TestApply_PreservesReadOnlyFields(t *testing.T) {
 
 func TestSerialize_ContainsReadOnlyReferenceSection(t *testing.T) {
 	task := taskwarrior.Task{
-		ID:       3,
-		UUID:     "uuid-1",
-		Status:   "pending",
-		Entry:    "entry-ts",
-		Modified: "modified-ts",
-		End:      "end-ts",
-		Urgency:  1,
+		ID:            3,
+		UUID:          "uuid-1",
+		Status:        "pending",
+		Entry:         "entry-ts",
+		Modified:      "modified-ts",
+		End:           "end-ts",
+		Urgency:       1,
+		UrgencyOffset: 2.5,
 	}
 
 	buf := Serialize(task)
@@ -180,4 +183,5 @@ func TestSerialize_ContainsReadOnlyReferenceSection(t *testing.T) {
 	assert.Contains(t, buf, "Modified: modified-ts")
 	assert.Contains(t, buf, "End: end-ts")
 	assert.Contains(t, buf, "Urgency: 1")
+	assert.Contains(t, buf, "UrgencyOffset: 2.5")
 }

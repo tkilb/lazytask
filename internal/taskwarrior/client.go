@@ -90,6 +90,24 @@ func (c *Client) buildEnv() []string {
 	return env
 }
 
+// EnsureUDA registers the "urgencyoffset" numeric UDA (see Task.UrgencyOffset) in
+// Taskwarrior's config if it isn't already configured as such, so manual
+// reordering (Ctrl+j/Ctrl+k in the Tasks panel) has somewhere to persist
+// its per-task rank offset. Idempotent and safe to call on every startup:
+// it first checks the current value via `task _get` and only writes when
+// it differs, avoiding an unnecessary config file rewrite on every run.
+func (c *Client) EnsureUDA(ctx context.Context) error {
+	out, err := c.run(ctx, "_get", "rc.uda.urgencyoffset.type")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) == "numeric" {
+		return nil
+	}
+	_, err = c.run(ctx, "rc.confirmation=off", "config", "uda.urgencyoffset.type", "numeric")
+	return err
+}
+
 // Export runs `task [filters...] export` and decodes the resulting JSON tasks.
 func (c *Client) Export(ctx context.Context, filters ...string) ([]Task, error) {
 	args := make([]string, 0, len(filters)+1)

@@ -83,6 +83,13 @@ func TestClient_SetPriority_EmptyID(t *testing.T) {
 	assert.Contains(t, err.Error(), "must not be empty")
 }
 
+func TestClient_SetUrgencyOffset_EmptyID(t *testing.T) {
+	c := NewClient()
+	err := c.SetUrgencyOffset(context.Background(), "  ", 1.5)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
 func TestClient_Import_EmptyData(t *testing.T) {
 	c := NewClient()
 	err := c.Import(context.Background(), []byte("   "))

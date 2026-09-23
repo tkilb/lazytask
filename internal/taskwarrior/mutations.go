@@ -19,6 +19,7 @@ type TaskMutator interface {
 	Purge(ctx context.Context, id string) error
 	Import(ctx context.Context, data []byte) error
 	SetPriority(ctx context.Context, id, priority string) error
+	SetUrgencyOffset(ctx context.Context, id string, rank float64) error
 }
 
 // createdTaskRE matches Taskwarrior's "Created task <id>." confirmation line.
@@ -120,6 +121,17 @@ func (c *Client) SetPriority(ctx context.Context, id, priority string) error {
 		return fmt.Errorf("id must not be empty")
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "priority:"+priority)
+	return err
+}
+
+// SetUrgencyOffset sets the manual-reorder "urgencyoffset" UDA (see Task.UrgencyOffset and
+// Client.EnsureUDA) of the task identified by id (a Taskwarrior ID or
+// UUID) to rank.
+func (c *Client) SetUrgencyOffset(ctx context.Context, id string, rank float64) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", fmt.Sprintf("urgencyoffset:%g", rank))
 	return err
 }
 

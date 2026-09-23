@@ -353,3 +353,47 @@ func TestNew_SortsByUrgencyDescending(t *testing.T) {
 	assert.Equal(t, 2, m.tasks[0].ID)
 	assert.Equal(t, 1, m.tasks[1].ID)
 }
+
+func TestSetTasks_SortsByEffectiveUrgencyIncludingUrgencyOffset(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "boosted by urgencyoffset", Urgency: 1.0, UrgencyOffset: 10.0},
+		{ID: 2, Description: "high urgency, no urgencyoffset", Urgency: 9.5},
+	}
+
+	m := New(nil).SetTasks(tasks)
+
+	got := make([]int, len(m.tasks))
+	for i, task := range m.tasks {
+		got[i] = task.ID
+	}
+	assert.Equal(t, []int{1, 2}, got)
+}
+
+func TestNeighbor_ReturnsAdjacentTaskInSortedOrder(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "low", Urgency: 1.0},
+		{ID: 2, Description: "mid", Urgency: 5.0},
+		{ID: 3, Description: "high", Urgency: 9.0},
+	}
+	// Sorted order (descending urgency): 3, 2, 1. Cursor defaults to 0 (task 3).
+	m := New(tasks)
+
+	below, ok := m.Neighbor(1)
+	require.True(t, ok)
+	assert.Equal(t, 2, below.ID)
+
+	_, ok = m.Neighbor(-1)
+	assert.False(t, ok)
+}
+
+func TestNeighbor_NoNeighborPastListBounds(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "only", Urgency: 1.0},
+	}
+	m := New(tasks)
+
+	_, ok := m.Neighbor(1)
+	assert.False(t, ok)
+	_, ok = m.Neighbor(-1)
+	assert.False(t, ok)
+}

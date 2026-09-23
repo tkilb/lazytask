@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -137,6 +138,7 @@ var tasksLocalBindings = []statusbar.Binding{
 	{Key: "x", Label: "delete"},
 	{Key: "e", Label: "edit"},
 	{Key: "h/m/l", Label: "priority"},
+	{Key: "ctrl+j/k", Label: "reorder"},
 }
 
 // projectsLocalBindings are only active while the Projects panel has
@@ -242,6 +244,13 @@ type TaskPrioritizer interface {
 	SetPriority(ctx context.Context, id, priority string) error
 }
 
+// TaskReRanker is the subset of the taskwarrior client needed to set a
+// task's manual reorder rank (see taskwarrior.Task.UrgencyOffset), so it can be
+// stubbed out in tests without shelling out to the real `task` binary.
+type TaskReRanker interface {
+	SetUrgencyOffset(ctx context.Context, id string, rank float64) error
+}
+
 // tasksLoadedMsg carries the result of a successful task fetch.
 type tasksLoadedMsg struct {
 	tasks []taskwarrior.Task
@@ -337,6 +346,20 @@ type taskPriorityErrMsg struct {
 	err error
 }
 
+// taskReorderedMsg carries the result of a successful manual-reorder
+// SetUrgencyOffset call, plus the undo.Action that reverses it (see
+// reorderTask) and the id of the task whose rank changed, so the cursor
+// can be kept on it after the following refresh re-sorts the list.
+type taskReorderedMsg struct {
+	id     int
+	action undo.Action
+}
+
+// taskReorderErrMsg carries the error from a failed SetUrgencyOffset call.
+type taskReorderErrMsg struct {
+	err error
+}
+
 // undoAppliedMsg carries the description of the undo.Action whose Undo
 // func just ran successfully via the "u" key.
 type undoAppliedMsg struct {
@@ -401,6 +424,7 @@ type model struct {
 	purger         TaskPurger
 	importer       TaskImporter
 	prioritizer    TaskPrioritizer
+	reranker       TaskReRanker
 	list           tasklist.Model
 	add            addform.Model
 	adding         bool
@@ -431,6 +455,16 @@ type model struct {
 // so the app reopens filtered the way the user left it.
 func initialModel() model {
 	client := taskwarrior.NewClient()
+	// Best-effort, idempotent: registers the "urgencyoffset" UDA (see
+	// taskwarrior.Task.UrgencyOffset) so manual reordering has somewhere to
+	// persist its per-task rank offset. A failure here (e.g. `task` not
+	// installed) doesn't block startup — Ctrl+j/Ctrl+k just won't persist
+	// correctly, same as any other taskwarrior mutation would fail.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := client.EnsureUDA(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not register urgencyoffset UDA: %v\n", err)
+	}
+	cancel()
 	persisted := config.Load()
 	return model{
 		reader:        client,
@@ -441,6 +475,7 @@ func initialModel() model {
 		purger:        client,
 		importer:      client,
 		prioritizer:   client,
+		reranker:      client,
 		list:          tasklist.New(nil).SetFocused(true),
 		add:           addform.New(),
 		projects:      projects.New(),
@@ -781,6 +816,44 @@ func setPriorityTask(prioritizer TaskPrioritizer, task taskwarrior.Task, priorit
 	}
 }
 
+// reorderEpsilon is the small offset added past a neighbor's effective
+// urgency (Urgency+UrgencyOffset) when computing a moved task's new UrgencyOffset, so
+// it sorts just past that neighbor without otherwise disturbing the list.
+const reorderEpsilon = 0.0001
+
+// reorderTask returns a tea.Cmd that manually reorders task past neighbor
+// in the Tasks panel's urgency-sorted list (Ctrl+j/Ctrl+k), by setting
+// task's UrgencyOffset UDA via reranker so its effective urgency
+// (Urgency+UrgencyOffset) lands just past neighbor's, leaving neighbor's own
+// rank untouched. down is true when moving task later in the list (past
+// the neighbor below it), false when moving it earlier (past the neighbor
+// above it). Returns an undo.Action that restores task's prior UrgencyOffset.
+func reorderTask(reranker TaskReRanker, task, neighbor taskwarrior.Task, down bool) tea.Cmd {
+	return func() tea.Msg {
+		id := taskID(task)
+		prior := task.UrgencyOffset
+		neighborUrgency := neighbor.Urgency + neighbor.UrgencyOffset
+		var newRank float64
+		if down {
+			newRank = neighborUrgency - reorderEpsilon - task.Urgency
+		} else {
+			newRank = neighborUrgency + reorderEpsilon - task.Urgency
+		}
+		if err := reranker.SetUrgencyOffset(context.Background(), id, newRank); err != nil {
+			return taskReorderErrMsg{err: err}
+		}
+		return taskReorderedMsg{id: task.ID, action: undo.Action{
+			Description: fmt.Sprintf("reorder task %s", id),
+			Undo: func() error {
+				return reranker.SetUrgencyOffset(context.Background(), id, prior)
+			},
+			Redo: func() error {
+				return reranker.SetUrgencyOffset(context.Background(), id, newRank)
+			},
+		}}
+	}
+}
+
 // runUndo returns a tea.Cmd that invokes a previously-pushed undo.Action's
 // Undo func (see the "u" key binding in Update).
 func runUndo(a undo.Action) tea.Cmd {
@@ -1053,6 +1126,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, setPriorityTask(m.prioritizer, task, strings.ToUpper(msg.String()))
 			}
 			return m, nil
+		case "ctrl+j":
+			if task, ok := m.list.Selected(); ok {
+				if neighbor, ok := m.list.Neighbor(1); ok {
+					return m, reorderTask(m.reranker, task, neighbor, true)
+				}
+			}
+			return m, nil
+		case "ctrl+k":
+			if task, ok := m.list.Selected(); ok {
+				if neighbor, ok := m.list.Neighbor(-1); ok {
+					return m, reorderTask(m.reranker, task, neighbor, false)
+				}
+			}
+			return m, nil
 		}
 	case tasksLoadedMsg:
 		m.list = m.list.SetTasks(msg.tasks)
@@ -1122,6 +1209,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingFocusID = msg.id
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
 	case taskPriorityErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskReorderedMsg:
+		m.undo.Push(msg.action)
+		m.pendingFocusID = msg.id
+		return m, fetchTasks(m.reader, m.taskFilters()...)
+	case taskReorderErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case undoAppliedMsg:
@@ -1542,6 +1636,7 @@ func (m model) detailsPanelContent() string {
 		fmt.Sprintf("Priority:    %s", priority),
 		fmt.Sprintf("Due:         %s", due),
 		fmt.Sprintf("Urgency:     %.2f", task.Urgency),
+		fmt.Sprintf("Urg.Offset:  %.4f", task.UrgencyOffset),
 		fmt.Sprintf("Entry:       %s", task.Entry),
 		fmt.Sprintf("Modified:    %s", task.Modified),
 	}

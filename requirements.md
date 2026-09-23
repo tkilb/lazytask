@@ -106,121 +106,19 @@ than a human would spend minutes:
   not-yet-built chunk, define the minimal Go interface/struct it needs and
   stub it, rather than blocking — this lets chunks be parallelized safely.
 
-## 7. Future Phases (post-MVP, not to be started without explicit sign-off)
+## 7. Outstanding Phases to be Completed
 
-Same rules as Section 5 (one chunk at a time, human sign-off between each)
-and Section 6 (bounded diff size, no speculative work) apply to every phase
-and chunk below. Each phase's chunk list is a **starting proposal** — it
-should be re-confirmed with the human before the first chunk of that phase
-begins, since scope/design may shift by the time we get there.
-
-### Phase 2 — Navigation & Discovery
-
-DONE (see `git log` for detail): focus newly-added task in list; popups for
-warnings/errors/confirmations (`internal/ui/popup`); global vs. local
-keybinding architecture + Done/Deleted task reopen/restore/purge; project
-rename + Projects-panel task counts; global add key with project-filter
-auto-assign on new tasks; general panel layout (grid + focus nav; Status
-panel key `1`; Tasks panel status tabs Todo/Done/Deleted; shared filter
-state + Projects panel key `3`; Details panel key `0`); Tasks and Projects
-panel scrolling, plus a lazygit-style "N of M" position footer embedded in
-the bottom border of both panels (`internal/ui/panel.ScrollWindow` +
-`Frame`/`FrameTabs` optional footer arg).
-
-Phase 2 is now complete — nothing remaining is currently scoped.
-
-### Phase 3 — Customization
-
-DONE **Theming** — (no YAML config; hardcoded to match lazygit's default
-theme for tool consistency). Panel border/title colors in
-`internal/ui/panel` (`FocusedColor`, `UnfocusedColor`,
-`activeTabColor`/`inactiveTabColor`) now reference a small named
-`palette` block (`paletteDefault`/`paletteGreen`/`paletteBlue`) instead of
-raw color literals, keyed off lazygit's default `activeBorderColor`
-(green), `inactiveBorderColor` (default/unstyled), and
-`optionsTextColor` (blue) — this also fixes the original contrast bug
-(active status tab vs. focused-panel border) since the tab highlight
-(blue) and focus color (green) are now distinct. The Tasks/Projects
-panels' selected-row highlight (`selectedRowStyle` in
-`internal/ui/tasklist` and `internal/ui/projects`) was also switched from
-a generic `Reverse(true)` to an explicit blue background
-(`panel.SelectedRowBackground`, same `paletteBlue`), matching lazygit's
-default `selectedLineBgColor`.
-
-### Phase 4 — Data Safety & Sync
-
-DONE **Undo stack** — multi-level, in-memory (not persisted across
-restarts) undo/redo stack (`internal/undo`) covering done/delete/restore/
-purge mutations from the Tasks panel. `u` undoes the most recent action,
-`ctrl+r` redoes the most recently undone one; pushing a new action after
-an undo discards stale redo history (standard undo-stack semantics).
-Purge's undo re-imports the pre-purge task snapshot via `importer.Import`,
-so purge is undoable within the running session even though Taskwarrior's
-own purge is normally irreversible. Add/edit mutations are not yet wired
-into the undo stack — open follow-up if needed.
-
-### Phase 5 — Priority logic
-
-- **Priority-based coloring** — color-code each row in the Tasks panel by
-  its `priority` field (e.g. H=red, M=yellow, L=default/unstyled, none=
-  default), consistent with the existing hardcoded-color pattern in
-  `internal/ui/panel` (see Phase 3 theming note — should stay overridable
-  later, not hardcoded in a way that fights that future work).
-- **Urgency-based default sort** — always sort the Tasks panel by
-  taskwarrior's computed `urgency` field (descending), rather than
-  taskwarrior's default export/ID order. No selectable sort mode or
-  keybinding is needed: taskwarrior's urgency coefficients already weight
-  `priority` heavily by default, so this alone satisfies "sort by urgency,
-  with priority as the largest factor" without lazytask needing its own
-  weighting logic. (A prior draft of this requirement proposed a
-  selectable sort-mode toggle; that was a mistake and has been replaced
-  with this always-on behavior.)
-- **Quick set-priority keys** — from the Tasks panel (task focused), `h`/
-  `m`/`l` set that task's priority directly to H/M/L respectively (via
-  `task <id> modify priority:H|M|L`), no popup/confirmation needed. A
-  fourth key/action to clear priority back to none is still open (not
-  specified — needs a decision, e.g. reusing one of h/m/l as a toggle-off
-  if already at that value, vs. a separate key).
-- **Urgency-based manual reordering (`Ctrl+j` / `Ctrl+k`)** — within a
-  task's current priority lane (H, M, or L), let the user "nudge" a task
-  up/down relative to its neighbors to establish a custom order, without
-  changing its priority band.
-  - **Open design problem, not yet solved:** taskwarrior's `urgency` is a
-    **computed, read-only value** (derived from due date, age, tags,
-    project, etc. via coefficients) — it is not a stored field and cannot
-    be directly set via `task modify urgency:...`. So "mutate the urgency
-    score" as stated isn't literally achievable against taskwarrior as-is.
-    Options to actually deliver the described "custom order within a
-    priority lane" behavior, to be decided before chunking:
-    1. Introduce a lazytask-owned UDA (e.g. `priority_ord` or similar,
-       registered via taskwarrior's UDA config) as a manual sort-key
-       nudged by `Ctrl+j`/`Ctrl+k`, used as a secondary sort key after
-       priority — real `urgency` is left alone, purely computed as normal.
-    2. Nudge one of taskwarrior's real urgency inputs that's cheap to
-       toggle per-task (e.g. a lazytask-managed tag like `+ord1`/`+ord2`
-       with configured urgency coefficients) so it does actually move the
-       real urgency score, at the cost of needing coefficient config setup.
-    3. Purely a lazytask-side, in-memory/local sort override (not synced
-       to taskwarrior at all), simplest but lost if sorting is recomputed
-       from a fresh `task export`.
-    - Leaning toward option 1 (dedicated UDA) as least surprising and most
-      durable, but needs explicit sign-off since it means lazytask starts
-      writing/depending on a UDA it defines, which is new territory.
-  - Also needs a decision on whether `Ctrl+j`/`Ctrl+k` swap with the
-    adjacent task or nudge by a fixed increment (matters once ties/gaps in
-    the sort key accumulate).
 ### Phase 6 - Advanced Wizards
 
 - Make an new component that will allow the user to quickly pick a due date.
   The idea is we want a cord like '2d' for two days from now and '1w' for on week from now.
   '2b' will be two business days from now, assume Sat and Sun are not business days.
 - 'p' from the edit panel will open a popup for a quick project picker for filtering
-- 't' from the edit panel will open a popup for a quick tag picker for filtering
 - 'P' from the edit panel will open a popup for project re-assign, allow for existing project to be selected from a list
   or a new one to be keyed in
   or a new one to be keyed in
 - 'D' will make use of the date component for the selected task. cord shortcuts may be used for a quick date or have the option for a custom date key in
-- Add will now have additional fields for project, tags, due date an priority.
+- Add will now have additional fields for project, priority and due date.
 
 ### Phase 7 — Tags
 
@@ -230,6 +128,8 @@ into the undo stack — open follow-up if needed.
   the same unfiltered query as Projects. Pending sign-off/implementation
 - 'T' from the edit panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
   If keyed in, there will be a comma delimited list and the mode will be replacement instead.
+- 't' from the edit panel will open a popup for a quick tag picker for filtering
+- Add tags to the add form, should come before due date
 
 ### Phase 8 — Low Priority
 

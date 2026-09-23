@@ -15,6 +15,7 @@
 //	Modified: <string>
 //	End: <string>
 //	Urgency: <float>
+//	UrgencyOffset: <float>
 //
 // Everything above the divider is user-editable and re-imported on save.
 // Everything below the divider is read-only reference: it is rendered for
@@ -65,7 +66,8 @@ func Serialize(t taskwarrior.Task) string {
 	fmt.Fprintf(&b, "Entry: %s\n", t.Entry)
 	fmt.Fprintf(&b, "Modified: %s\n", t.Modified)
 	fmt.Fprintf(&b, "End: %s\n", t.End)
-	fmt.Fprintf(&b, "Urgency: %s\n", formatUrgency(t.Urgency))
+	fmt.Fprintf(&b, "Urgency: %s\n", formatFloat(t.Urgency))
+	fmt.Fprintf(&b, "UrgencyOffset: %s\n", formatFloat(t.UrgencyOffset))
 
 	return b.String()
 }
@@ -164,10 +166,10 @@ func parseTags(value string) []string {
 	return tags
 }
 
-// formatUrgency renders a task's urgency as a plain decimal string,
-// omitting a trailing zero value's ".0" the way strconv.FormatFloat's 'g'
-// format would but without switching to scientific notation for
-// typical urgency magnitudes.
-func formatUrgency(u float64) string {
-	return strconv.FormatFloat(u, 'f', -1, 64)
+// formatFloat renders a read-only reference float field (Urgency,
+// UrgencyOffset) as a plain decimal string, omitting a trailing zero value's
+// ".0" the way strconv.FormatFloat's 'g' format would but without
+// switching to scientific notation for typical magnitudes.
+func formatFloat(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }

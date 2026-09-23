@@ -20,6 +20,11 @@ type Task struct {
 	End         string   `json:"end,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Urgency     float64  `json:"urgency,omitempty"`
+	// UrgencyOffset is a lazytask-managed numeric UDA (see Client.EnsureUDA) that
+	// nudges a task's position within the urgency-sorted Tasks panel list,
+	// added to Urgency to form the effective sort key. It has no meaning to
+	// Taskwarrior itself and defaults to 0 (no manual override).
+	UrgencyOffset float64 `json:"urgencyoffset,omitempty"`
 }
 
 // ParseTasks decodes Taskwarrior JSON export bytes into a slice of Task structs.
