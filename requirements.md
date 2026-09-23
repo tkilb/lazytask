@@ -122,7 +122,7 @@ than a human would spend minutes:
       or a new one to be keyed in
       or a new one to be keyed in
 - [x] 'D' will make use of the date component for the selected task. cord shortcuts may be used for a quick date or have the option for a custom date key in
-- [ ] Add will now have additional fields for project, priority and due date.
+- [x] Add will now have additional fields for project, priority and due date.
 
 ### Phase 7 — Tags
 

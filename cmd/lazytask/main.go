@@ -22,6 +22,7 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/statusbar"
+	"github.com/tkilb/lazytask/internal/ui/taskform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 	"github.com/tkilb/lazytask/internal/undo"
 )
@@ -473,7 +474,7 @@ type model struct {
 	duer           TaskDueSetter
 	projecter      TaskProjectSetter
 	list           tasklist.Model
-	add            addform.Model
+	add            taskform.Model
 	adding         bool
 	deleting       bool
 	purging        bool
@@ -534,7 +535,7 @@ func initialModel() model {
 		duer:           client,
 		projecter:      client,
 		list:           tasklist.New(nil).SetFocused(true),
-		add:            addform.New(),
+		add:            taskform.New(),
 		datePick:       datepick.New(),
 		projects:       projects.New(),
 		projectPicker:  projects.New(),
@@ -1159,6 +1160,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "a":
 			m.adding = true
 			m.add = m.add.Focus()
+			// Pre-fill the Project field with whatever real project is
+			// currently selected via the Projects panel filter, so "a"
+			// from any panel starts already scoped to that project (the
+			// user can still edit/clear it). Only a non-nil, non-empty
+			// filter.project is a real project name: nil means "(all)"
+			// (no filter) and "" means "(none)" (explicitly project-less),
+			// neither of which should pre-fill the field.
+			if m.filter.project != nil && *m.filter.project != "" {
+				m.add = m.add.SetProject(*m.filter.project)
+			}
 			return m, m.add.Init()
 		case "u":
 			act, ok := m.undo.Undo()
@@ -1549,24 +1560,36 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.add = m.add.Blur()
 			return m, nil
 		case "enter":
-			description := strings.TrimSpace(m.add.Value())
+			description := strings.TrimSpace(m.add.Description())
 			if description == "" {
 				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Description cannot be empty."})
 				return m, nil
 			}
+			priority, ok := m.add.Priority()
+			if !ok {
+				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Priority must be H, M, L, or blank."})
+				return m, nil
+			}
+			// A blank Priority field defaults to M rather than leaving the
+			// new task with no priority at all.
+			if priority == "" {
+				priority = "M"
+			}
+			var extraArgs []string
+			if project := strings.TrimSpace(m.add.Project()); project != "" {
+				extraArgs = append(extraArgs, "project:"+project)
+			}
+			extraArgs = append(extraArgs, "priority:"+priority)
+			if dueInput := strings.TrimSpace(m.add.DueInput()); dueInput != "" {
+				due, ok := m.add.ResolveDue()
+				if !ok {
+					m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Invalid due date."})
+					return m, nil
+				}
+				extraArgs = append(extraArgs, "due:"+due.UTC().Format(taskDueLayout))
+			}
 			m.adding = false
 			m.add = m.add.Blur()
-			var extraArgs []string
-			// Auto-assign the task to whatever real project is currently
-			// selected via the Projects panel filter, so "a" from any
-			// panel creates tasks already scoped to that project. Only a
-			// non-nil, non-empty filter.project is a real project name:
-			// nil means "(all)" (no filter) and "" means "(none)"
-			// (explicitly project-less), neither of which should be
-			// applied to the new task.
-			if m.filter.project != nil && *m.filter.project != "" {
-				extraArgs = append(extraArgs, "project:"+*m.filter.project)
-			}
 			return m, addTask(m.adder, description, extraArgs...)
 		}
 	}

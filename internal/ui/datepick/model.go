@@ -109,20 +109,24 @@ func (m Model) Value() string {
 	return m.input.Value()
 }
 
-// Resolved parses and resolves the current input, first as a cord relative
-// to now(), then (if that fails) as an absolute date typed in directly via
-// parseFlexibleAbsoluteDate (a looser US/international date, no
-// time-of-day) — so a user can either type a quick cord or key in a
-// specific date. ok is false if neither parses (including an empty
-// input).
+// Resolved parses and resolves the current input using ResolveInput. ok is
+// false if it doesn't parse (including an empty input).
 func (m Model) Resolved() (t time.Time, ok bool) {
-	value := m.input.Value()
-
 	nowFn := m.now
 	if nowFn == nil {
 		nowFn = time.Now
 	}
-	now := nowFn()
+	return ResolveInput(m.input.Value(), nowFn())
+}
+
+// ResolveInput parses and resolves value relative to now, first as a cord
+// (see internal/dateparse), then (if that fails) as an absolute date typed
+// in directly via parseFlexibleAbsoluteDate (a looser US/international
+// date, no time-of-day) — so a user can either type a quick cord or key in
+// a specific date. ok is false if neither parses (including an empty
+// input). Exported so other components needing the same due-date parsing
+// (e.g. the Add form's due-date field) don't have to duplicate it.
+func ResolveInput(value string, now time.Time) (t time.Time, ok bool) {
 	if resolved, err := dateparse.ResolveString(value, now); err == nil {
 		return resolved, true
 	}

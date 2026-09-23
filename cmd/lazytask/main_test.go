@@ -15,10 +15,10 @@ import (
 	"github.com/tkilb/lazytask/internal/editbuffer"
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
-	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/datepick"
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
+	"github.com/tkilb/lazytask/internal/ui/taskform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 )
 
@@ -299,7 +299,7 @@ func TestModelUpdate_GlobalKeysWorkFromAnyFocus(t *testing.T) {
 func TestModelUpdate_AddIsGlobal(t *testing.T) {
 	for _, focus := range []panelFocus{focusStatus, focusTasks, focusProjects, focusTags, focusDetails} {
 		t.Run(panelTitle(focus), func(t *testing.T) {
-			m := model{list: tasklist.New(nil), add: addform.New(), focus: focus}
+			m := model{list: tasklist.New(nil), add: taskform.New(), focus: focus}
 			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 			mm, ok := newModel.(model)
 			assert.True(t, ok)
@@ -464,9 +464,12 @@ func TestModelView(t *testing.T) {
 	})
 
 	t.Run("shows add form when adding", func(t *testing.T) {
-		m := model{list: tasklist.New(nil), add: addform.New(), adding: true}
+		m := model{list: tasklist.New(nil), add: taskform.New(), adding: true}
 		view := m.View()
-		assert.Contains(t, view, "Add Task")
+		assert.Contains(t, view, "Description")
+		assert.Contains(t, view, "Project")
+		assert.Contains(t, view, "Priority")
+		assert.Contains(t, view, "Due Date")
 		assert.Contains(t, view, "enter")
 		assert.Contains(t, view, "add")
 		assert.Contains(t, view, "esc")
@@ -583,7 +586,7 @@ func TestDetailsPanelContent(t *testing.T) {
 }
 
 func TestModelUpdate_AKeyEntersAddingMode(t *testing.T) {
-	m := model{list: tasklist.New(nil), add: addform.New()}
+	m := model{list: tasklist.New(nil), add: taskform.New()}
 
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	mm, ok := newModel.(model)
@@ -596,14 +599,14 @@ func TestModelUpdate_AKeyEntersAddingMode(t *testing.T) {
 func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 	adder := &stubAdder{}
 	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
-	m := model{reader: reader, adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true}
+	m := model{reader: reader, adder: adder, list: tasklist.New(nil), add: taskform.New(), adding: true}
 	m.add = m.add.Focus()
 
 	for _, r := range "Buy milk" {
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		m = newModel.(model)
 	}
-	assert.Equal(t, "Buy milk", m.add.Value())
+	assert.Equal(t, "Buy milk", m.add.Description())
 
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = newModel.(model)
@@ -630,15 +633,18 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 }
 
 // TestModelUpdate_AddingAutoAssignsSelectedProjectFilter verifies that
-// submitting the add form while a real project filter is selected (via the
-// Projects panel) passes that project along as a `project:` argument, so
-// new tasks are automatically scoped to the currently-filtered project.
+// opening the add form (via "a") while a real project filter is selected
+// (via the Projects panel) pre-fills the form's Project field with that
+// project, so new tasks are automatically scoped to the currently-filtered
+// project unless the user edits/clears the field before submitting.
 func TestModelUpdate_AddingAutoAssignsSelectedProjectFilter(t *testing.T) {
 	t.Run("real project filter is applied", func(t *testing.T) {
 		adder := &stubAdder{}
 		project := "chores"
-		m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true, filter: filterState{project: &project}}
-		m.add = m.add.Focus()
+		m := model{adder: adder, list: tasklist.New(nil), add: taskform.New(), filter: filterState{project: &project}}
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+		m = newModel.(model)
 		for _, r := range "Mow lawn" {
 			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 			m = newModel.(model)
@@ -650,13 +656,15 @@ func TestModelUpdate_AddingAutoAssignsSelectedProjectFilter(t *testing.T) {
 		cmd()
 
 		require.Len(t, adder.extraArgs, 1)
-		assert.Equal(t, []string{"project:chores"}, adder.extraArgs[0])
+		assert.Equal(t, []string{"project:chores", "priority:M"}, adder.extraArgs[0])
 	})
 
 	t.Run("no filter (all) adds no project arg", func(t *testing.T) {
 		adder := &stubAdder{}
-		m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true}
-		m.add = m.add.Focus()
+		m := model{adder: adder, list: tasklist.New(nil), add: taskform.New()}
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+		m = newModel.(model)
 		for _, r := range "Buy milk" {
 			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 			m = newModel.(model)
@@ -668,14 +676,16 @@ func TestModelUpdate_AddingAutoAssignsSelectedProjectFilter(t *testing.T) {
 		cmd()
 
 		require.Len(t, adder.extraArgs, 1)
-		assert.Empty(t, adder.extraArgs[0])
+		assert.Equal(t, []string{"priority:M"}, adder.extraArgs[0])
 	})
 
 	t.Run("(none) filter adds no project arg", func(t *testing.T) {
 		adder := &stubAdder{}
 		none := ""
-		m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true, filter: filterState{project: &none}}
-		m.add = m.add.Focus()
+		m := model{adder: adder, list: tasklist.New(nil), add: taskform.New(), filter: filterState{project: &none}}
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+		m = newModel.(model)
 		for _, r := range "Buy milk" {
 			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 			m = newModel.(model)
@@ -687,13 +697,13 @@ func TestModelUpdate_AddingAutoAssignsSelectedProjectFilter(t *testing.T) {
 		cmd()
 
 		require.Len(t, adder.extraArgs, 1)
-		assert.Empty(t, adder.extraArgs[0])
+		assert.Equal(t, []string{"priority:M"}, adder.extraArgs[0])
 	})
 }
 
 func TestModelUpdate_AddingSubmitEmptyDescriptionShowsWarningPopup(t *testing.T) {
 	adder := &stubAdder{}
-	m := model{adder: adder, list: tasklist.New(nil), add: addform.New(), adding: true}
+	m := model{adder: adder, list: tasklist.New(nil), add: taskform.New(), adding: true}
 	m.add = m.add.Focus()
 
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -707,7 +717,7 @@ func TestModelUpdate_AddingSubmitEmptyDescriptionShowsWarningPopup(t *testing.T)
 }
 
 func TestModelUpdate_AddingEscCancels(t *testing.T) {
-	m := model{list: tasklist.New(nil), add: addform.New(), adding: true}
+	m := model{list: tasklist.New(nil), add: taskform.New(), adding: true}
 	m.add = m.add.Focus()
 	m.add, _ = m.add.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 
@@ -720,7 +730,7 @@ func TestModelUpdate_AddingEscCancels(t *testing.T) {
 
 func TestModelUpdate_TaskAddedMsgTriggersRefresh(t *testing.T) {
 	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 2, Description: "Water plants"}}}
-	m := model{reader: reader, list: tasklist.New(nil), add: addform.New()}
+	m := model{reader: reader, list: tasklist.New(nil), add: taskform.New()}
 
 	newModel, cmd := m.Update(taskAddedMsg{})
 	m = newModel.(model)
@@ -737,7 +747,7 @@ func TestModelUpdate_TaskAddedMsg_FocusesNewlyCreatedTask(t *testing.T) {
 		{ID: 2, Description: "Water plants"},
 		{ID: 3, Description: "Newly added task"},
 	}}
-	m := model{reader: reader, list: tasklist.New(nil), add: addform.New()}
+	m := model{reader: reader, list: tasklist.New(nil), add: taskform.New()}
 
 	// Simulate Add() reporting the new task's numeric ID.
 	newModel, cmd := m.Update(taskAddedMsg{id: 3})
@@ -759,7 +769,7 @@ func TestModelUpdate_TaskAddedMsg_FocusesNewlyCreatedTask(t *testing.T) {
 }
 
 func TestModelUpdate_TaskAddErrMsgSetsErr(t *testing.T) {
-	m := model{list: tasklist.New(nil), add: addform.New()}
+	m := model{list: tasklist.New(nil), add: taskform.New()}
 	wantErr := errors.New("add failed")
 
 	newModel, cmd := m.Update(taskAddErrMsg{err: wantErr})
@@ -1890,7 +1900,7 @@ func TestModelUpdate_WindowSizeMsgResizesListPanel(t *testing.T) {
 }
 
 func TestModelView_RendersGridWithAllPanelTitles(t *testing.T) {
-	m := model{list: tasklist.New(nil), add: addform.New()}
+	m := model{list: tasklist.New(nil), add: taskform.New()}
 	view := m.View()
 
 	for _, want := range []string{"[2]-Todo - Done - Deleted", "[1]-Status", "[3]-Projects", "[4]-Tags", "[0]-Details"} {
