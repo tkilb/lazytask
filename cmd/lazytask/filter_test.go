@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/tkilb/lazytask/internal/ui/projects"
+	"github.com/tkilb/lazytask/internal/ui/tags"
 )
 
 func TestFilterState_TaskFilter(t *testing.T) {
@@ -58,6 +59,9 @@ func TestFilterState_Equal(t *testing.T) {
 		{name: "same project, different pointers", a: filterState{}.withProjectSelection("work"), b: filterState{}.withProjectSelection("work"), want: true},
 		{name: "all vs none", a: filterState{}, b: filterState{}.withProjectSelection(projects.NoneLabel), want: false},
 		{name: "different projects", a: filterState{}.withProjectSelection("work"), b: filterState{}.withProjectSelection("home"), want: false},
+		{name: "same tag, different pointers", a: filterState{}.withTagSelection("urgent"), b: filterState{}.withTagSelection("urgent"), want: true},
+		{name: "any vs specific tag", a: filterState{}, b: filterState{}.withTagSelection("urgent"), want: false},
+		{name: "different tags", a: filterState{}.withTagSelection("urgent"), b: filterState{}.withTagSelection("later"), want: false},
 	}
 
 	for _, tt := range tests {
@@ -66,5 +70,32 @@ func TestFilterState_Equal(t *testing.T) {
 				t.Errorf("equal() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFilterState_WithTagSelection(t *testing.T) {
+	f := filterState{}
+
+	f = f.withTagSelection("urgent")
+	if got := f.taskFilter(); got != "+urgent" {
+		t.Fatalf("after selecting 'urgent', taskFilter() = %q", got)
+	}
+	if got := f.tagLabel(); got != "urgent" {
+		t.Fatalf("tagLabel() = %q, want %q", got, "urgent")
+	}
+
+	f = f.withTagSelection(tags.AnyLabel)
+	if got := f.taskFilter(); got != "" {
+		t.Fatalf("after selecting %s, taskFilter() = %q, want empty", tags.AnyLabel, got)
+	}
+	if got := f.tagLabel(); got != tags.AnyLabel {
+		t.Fatalf("tagLabel() = %q, want %q", got, tags.AnyLabel)
+	}
+}
+
+func TestFilterState_TaskFilter_CombinesProjectAndTag(t *testing.T) {
+	f := filterState{}.withProjectSelection("work").withTagSelection("urgent")
+	if got, want := f.taskFilter(), "project:work +urgent"; got != want {
+		t.Fatalf("taskFilter() = %q, want %q", got, want)
 	}
 }

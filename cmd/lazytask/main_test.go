@@ -18,6 +18,7 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/datepick"
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
+	"github.com/tkilb/lazytask/internal/ui/tags"
 	"github.com/tkilb/lazytask/internal/ui/taskform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 )
@@ -629,7 +630,7 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 	loaded, ok := findTasksLoaded(refreshMsg)
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
-	assert.Equal(t, 2, reader.calls) // one for tasks, one for the projects panel
+	assert.Equal(t, 3, reader.calls) // one for tasks, one for the projects panel, one for the tags panel
 }
 
 // TestModelUpdate_AddingAutoAssignsSelectedProjectFilter verifies that
@@ -835,7 +836,7 @@ func TestModelUpdate_CompletingConfirmYDonesOnTodoTab(t *testing.T) {
 	refreshMsgs := runBatch(refreshCmd)
 	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
-	assert.Equal(t, 2, reader.calls, "expected both a task refresh and a projects refresh (so counts stay in sync)")
+	assert.Equal(t, 3, reader.calls, "expected a task refresh plus projects and tags refreshes (so counts stay in sync)")
 }
 
 // TestModelUpdate_CompletingConfirmYRestoresThenDonesOnDeletedTab verifies
@@ -1144,7 +1145,7 @@ func TestModelUpdate_RestoringConfirmYRestoresOnDoneTab(t *testing.T) {
 	refreshMsgs := runBatch(refreshCmd)
 	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
-	assert.Equal(t, 2, reader.calls, "expected both a task refresh and a projects refresh (so counts stay in sync)")
+	assert.Equal(t, 3, reader.calls, "expected a task refresh plus projects and tags refreshes (so counts stay in sync)")
 }
 
 func TestModelUpdate_RestoringConfirmYRestoresOnDeletedTab(t *testing.T) {
@@ -1887,6 +1888,136 @@ func TestModelUpdate_ProjectsNavigatingBackToAllClearsFilter(t *testing.T) {
 	require.NotNil(t, cmd)
 	assert.Nil(t, m.filter.project)
 	assert.Equal(t, []string{"status:pending"}, m.taskFilters())
+}
+
+// TestFetchTags_ScopesToProjectFilter verifies fetchTags includes a
+// project: fragment in its query when scoped to a project, and omits it
+// entirely (unfiltered pending tasks) when no project is selected.
+func TestFetchTags_ScopesToProjectFilter(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Status: "pending", Project: "home", Tags: []string{"urgent"}}}}
+
+	msg := fetchTags(reader, "project:home")()
+	require.IsType(t, tagsLoadedMsg{}, msg)
+	assert.Equal(t, []string{"status:pending", "project:home"}, reader.lastFilters)
+
+	msg = fetchTags(reader, "")()
+	require.IsType(t, tagsLoadedMsg{}, msg)
+	assert.Equal(t, []string{"status:pending"}, reader.lastFilters)
+}
+
+// TestModelUpdate_ProjectsNavigationChangingProjectResetsTagFilter
+// verifies the Tags panel's filter/selection is scoped to the current
+// project: moving the Projects cursor onto a genuinely different project
+// resets any active tag filter back to (any) and re-fetches Tags scoped
+// to the newly selected project.
+func TestModelUpdate_ProjectsNavigationChangingProjectResetsTagFilter(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Project: "work", Tags: []string{"urgent"}}}}
+	m := model{
+		reader:   reader,
+		list:     tasklist.New(nil),
+		projects: projects.New().SetProjects([]string{"home", "work"}),
+		tags:     tags.New().SetTags([]string{"urgent"}).SelectLabel("urgent"),
+		focus:    focusProjects,
+		filter:   filterState{}.withProjectSelection("home").withTagSelection("urgent"),
+	}
+
+	// (home) -> (none) -> work: lands on "work", a genuinely different
+	// project than the "home" the tag filter was set under.
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+
+	require.NotNil(t, cmd)
+	assert.Nil(t, m.filter.tag, "tag filter should reset when the project changes")
+	label, ok := m.tags.Selected()
+	require.True(t, ok)
+	assert.Equal(t, tags.AnyLabel, label, "Tags panel's own cursor should follow the reset")
+
+	msgs := runBatch(cmd)
+	var sawScopedTagsFetch bool
+	for _, msg := range msgs {
+		if _, ok := msg.(tagsLoadedMsg); ok {
+			sawScopedTagsFetch = true
+		}
+	}
+	assert.True(t, sawScopedTagsFetch, "changing project should trigger a re-scoped Tags fetch")
+}
+
+// TestModelUpdate_ProjectsNavigationSameProjectKeepsTagFilter verifies a
+// keypress that doesn't actually move the cursor to a different project
+// (e.g. clamped at a list boundary) leaves an active tag filter alone.
+func TestModelUpdate_ProjectsNavigationSameProjectKeepsTagFilter(t *testing.T) {
+	m := model{
+		reader:   &stubReader{},
+		list:     tasklist.New(nil),
+		projects: projects.New().SetProjects([]string{"home"}),
+		tags:     tags.New().SetTags([]string{"urgent"}).SelectLabel("urgent"),
+		focus:    focusProjects,
+		filter:   filterState{}.withProjectSelection("home").withTagSelection("urgent"),
+	}
+	m.projects = m.projects.SelectLabel("home")
+
+	// Cursor is already clamped at "home"; pressing "down" again can't move
+	// further, so the project (and thus the tag filter) should be
+	// unaffected.
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+
+	assert.Nil(t, cmd)
+	require.NotNil(t, m.filter.tag)
+	assert.Equal(t, "urgent", *m.filter.tag)
+}
+
+// TestModel_ApplyProjectSelection_ClearsStickyKnownTagsOnProjectChange
+// verifies switching the selected project also clears m.knownTags, the
+// Tags-panel "sticky within this session" cache (see mergeKnownTags):
+// that stickiness is only valid per-project-scope, so carrying it forward
+// unchanged would leave tags from the previously selected project visible
+// even if the newly selected project has no pending tasks with that tag.
+func TestModel_ApplyProjectSelection_ClearsStickyKnownTagsOnProjectChange(t *testing.T) {
+	m := model{
+		reader:    &stubReader{},
+		filter:    filterState{}.withProjectSelection("home"),
+		knownTags: map[string]struct{}{"urgent": {}},
+	}
+
+	newM, cmd, changed := m.applyProjectSelection("work")
+	require.True(t, changed)
+	require.NotNil(t, cmd)
+	assert.Nil(t, newM.knownTags, "known-tags sticky cache should reset on project change")
+}
+
+// TestModelUpdate_ProjectsNavigationChangingProjectHidesStaleTagsPanelEntries
+// is an end-to-end regression test: a tag sticky from a previously
+// selected project must not remain visible in the Tags panel after
+// switching to a project that has no pending tasks with that tag.
+func TestModelUpdate_ProjectsNavigationChangingProjectHidesStaleTagsPanelEntries(t *testing.T) {
+	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Project: "work"}}} // no tags
+	m := model{
+		reader:    reader,
+		list:      tasklist.New(nil),
+		projects:  projects.New().SetProjects([]string{"home", "work"}),
+		tags:      tags.New().SetTags([]string{"urgent"}),
+		knownTags: map[string]struct{}{"urgent": {}},
+		focus:     focusProjects,
+		filter:    filterState{}.withProjectSelection("home"),
+	}
+	m.projects = m.projects.SelectLabel("home")
+
+	// home -> work: a genuinely different project.
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+
+	for _, msg := range runBatch(cmd) {
+		if _, ok := msg.(tagsLoadedMsg); ok {
+			newModel, _ = m.Update(msg)
+			m = newModel.(model)
+		}
+	}
+
+	assert.Empty(t, m.tags.Tags(), "the old project's tag should not linger in the Tags panel after switching projects")
 }
 
 func TestModelUpdate_WindowSizeMsgResizesListPanel(t *testing.T) {

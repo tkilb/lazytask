@@ -27,8 +27,12 @@ const (
 // project filter is applied, a pointer to "" means "no project" (only
 // projectless tasks), and any other pointer value is a specific project
 // name.
+//
+// Tag mirrors filterState.tag: nil means no tag filter is applied, and any
+// other pointer value is a specific tag name.
 type State struct {
 	Project *string `json:"project,omitempty"`
+	Tag     *string `json:"tag,omitempty"`
 }
 
 // Load reads the persisted state from disk. If the file doesn't exist, or

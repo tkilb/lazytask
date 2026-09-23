@@ -126,16 +126,16 @@ than a human would spend minutes:
 
 ### Phase 7 — Tags
 
-- **Tags panel (key 4)** — same pattern as the Projects panel, built on the
-  existing filter-state infra: lists distinct tags, with an `*any*` entry
-  first (wrapped in `*`), selecting a tag sets a `+tag` filter, sourced from
-  the same unfiltered query as Projects. Pending sign-off/implementation
-- 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
-  If keyed in, there will be a comma delimited list and the mode will be replacement instead.
-- 't' from the tasks panel will open a popup for a quick tag picker for filtering
-- Add tags to the add form, should come before due date
+- [x] **Tags panel (key 4)** — same pattern as the Projects panel, built on the
+      existing filter-state infra: lists distinct tags, with an `(any)` entry
+      first (wrapped in `*`), selecting a tag sets a `+tag` filter, sourced from
+      the same unfiltered query as Projects. Pending sign-off/implementation
+- [ ] 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
+      If keyed in, there will be a comma delimited list and the mode will be replacement instead.
+- [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
+- [ ] Add tags to the add form, should come before due date
 
-### Phase 8 — Low Priority
+### Phase 9 — Low Priority
 
 - **Remote task data** - Allow for a remote mode an local mode for tasks state.
   Approach: use taskwarrior/TaskChampion's native **git sync backend**

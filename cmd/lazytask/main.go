@@ -22,6 +22,7 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/statusbar"
+	"github.com/tkilb/lazytask/internal/ui/tags"
 	"github.com/tkilb/lazytask/internal/ui/taskform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 	"github.com/tkilb/lazytask/internal/undo"
@@ -157,6 +158,13 @@ var projectsLocalBindings = []statusbar.Binding{
 	{Key: "R", Label: "rename"},
 }
 
+// tagsLocalBindings are only active while the Tags panel has focus:
+// navigating the list automatically updates the shared tag filter.
+var tagsLocalBindings = []statusbar.Binding{
+	{Key: "↑/k", Label: "up"},
+	{Key: "↓/j", Label: "down"},
+}
+
 // statusBindings returns the keybinding hints to show in the status bar for
 // the model's current focus: global bindings always apply, and Tasks-panel
 // bindings are appended only while that panel is focused (local bindings
@@ -188,6 +196,9 @@ func (m model) statusBindings() []statusbar.Binding {
 	}
 	if m.focus == focusProjects {
 		bindings = append(bindings, projectsLocalBindings...)
+	}
+	if m.focus == focusTags {
+		bindings = append(bindings, tagsLocalBindings...)
 	}
 	return bindings
 }
@@ -290,6 +301,19 @@ type projectsLoadedMsg struct {
 
 // projectsErrMsg carries the error from a failed projects fetch.
 type projectsErrMsg struct {
+	err error
+}
+
+// tagsLoadedMsg carries the distinct, sorted tag names for the Tags
+// panel, sourced from the same unfiltered task query as fetchProjects
+// rather than whatever filter the Tasks panel currently has applied.
+type tagsLoadedMsg struct {
+	tags   []string
+	counts tags.Counts
+}
+
+// tagsErrMsg carries the error from a failed tags fetch.
+type tagsErrMsg struct {
 	err error
 }
 
@@ -503,6 +527,8 @@ type model struct {
 	projects       projects.Model
 	filter         filterState
 	knownProjects  map[string]struct{}
+	tags           tags.Model
+	knownTags      map[string]struct{}
 	undo           undo.Stack
 }
 
@@ -541,18 +567,61 @@ func initialModel() model {
 		projectPicker:  projects.New(),
 		reassignPicker: projects.New(),
 		knownProjects:  make(map[string]struct{}),
-		filter:         filterState{project: persisted.Project},
+		tags:           tags.New(),
+		knownTags:      make(map[string]struct{}),
+		filter:         filterState{project: persisted.Project, tag: persisted.Tag},
 	}
 }
 
 // setFocus updates which panel has focus, keeping the Tasks list's and
-// Projects panel's own focused flags (used for their border highlight) in
-// sync.
+// Projects/Tags panels' own focused flags (used for their border
+// highlight) in sync.
 func (m model) setFocus(f panelFocus) model {
 	m.focus = f
 	m.list = m.list.SetFocused(f == focusTasks)
 	m.projects = m.projects.SetFocused(f == focusProjects)
+	m.tags = m.tags.SetFocused(f == focusTags)
 	return m
+}
+
+// applyProjectSelection updates m.filter from a Projects-panel entry label
+// (a project name, or projects.NoneLabel/projects.AllLabel), applying two
+// rules: the project component updates as usual, and — only when the
+// project actually changes, not merely when this is called again with the
+// same already-selected label (e.g. a "k" keypress that doesn't move the
+// cursor past the top of the list) — the tag filter resets back to
+// tags.AnyLabel and the Tags panel's own visible cursor follows suit. This
+// keeps the Tags panel's data (scoped to the current project, see
+// fetchTags) and its selection from silently pointing at a tag that may
+// not even exist under the newly selected project.
+//
+// It also clears m.knownTags, the Tags-panel "sticky within this session"
+// cache (see mergeKnownTags): that cache is only valid for tags seen
+// *under the current project scope* — carrying tags forward from a
+// previously selected project would otherwise leave them visible in the
+// Tags panel even though the newly selected project has none of its own
+// pending tasks with that tag.
+//
+// It returns the updated model, a tea.Cmd re-fetching Tasks/Tags and
+// persisting the change (nil if nothing changed), and whether the filter
+// actually changed.
+func (m model) applyProjectSelection(label string) (model, tea.Cmd, bool) {
+	newFilter := m.filter.withProjectSelection(label)
+	if !stringPtrEqual(newFilter.project, m.filter.project) {
+		newFilter.tag = nil
+		m.knownTags = nil
+	}
+	if newFilter.equal(m.filter) {
+		return m, nil, false
+	}
+	m.filter = newFilter
+	m.tags = m.tags.SelectLabel(tags.AnyLabel)
+	cmd := tea.Batch(
+		fetchTasks(m.reader, m.taskFilters()...),
+		fetchTags(m.reader, m.filter.projectOnlyFilter()),
+		saveFilter(m.filter),
+	)
+	return m, cmd, true
 }
 
 // gridDims computes the panel grid's column widths and left-column row
@@ -650,13 +719,35 @@ func fetchProjects(reader TaskReader) tea.Cmd {
 	}
 }
 
-// saveFilter returns a tea.Cmd that persists f's project filter to disk
-// (see internal/config) so it's restored on the next app launch. On
+// fetchTags returns a tea.Cmd that loads the distinct tags across pending
+// tasks scoped to projectFilter (a "project:<name>" fragment, or "" for no
+// project scoping — see filterState.projectOnlyFilter). It deliberately
+// ignores any currently selected tag filter, for the same reason
+// fetchProjects ignores the project filter: applying a tag filter must not
+// shrink the very list used to change/clear that filter. Scoping to the
+// active project, however, is intentional — the Tags panel is meant to
+// show only the tags relevant to whatever project is currently selected.
+func fetchTags(reader TaskReader, projectFilter string) tea.Cmd {
+	return func() tea.Msg {
+		filters := []string{"status:pending"}
+		if projectFilter != "" {
+			filters = append(filters, projectFilter)
+		}
+		exported, err := reader.Export(context.Background(), filters...)
+		if err != nil {
+			return tagsErrMsg{err: err}
+		}
+		return tagsLoadedMsg{tags: distinctTags(exported), counts: tagCounts(exported)}
+	}
+}
+
+// saveFilter returns a tea.Cmd that persists f's project and tag filter to
+// disk (see internal/config) so it's restored on the next app launch. On
 // failure it reports a filterSaveErrMsg rather than blocking or reverting
 // the (already-applied) in-memory filter change.
 func saveFilter(f filterState) tea.Cmd {
 	return func() tea.Msg {
-		if err := config.Save(config.State{Project: f.project}); err != nil {
+		if err := config.Save(config.State{Project: f.project, Tag: f.tag}); err != nil {
 			return filterSaveErrMsg{err: err}
 		}
 		return nil
@@ -720,6 +811,60 @@ func distinctProjects(tasks []taskwarrior.Task) []string {
 		}
 		seen[t.Project] = struct{}{}
 		names = append(names, t.Project)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// tagCounts tallies pending ("todo") task counts per tag, plus the total
+// for the AnyLabel special entry (every pending task), so the Tags panel
+// can render a "(N)" field next to each entry. A task with multiple tags
+// contributes to each of its tags' counts.
+func tagCounts(tasks []taskwarrior.Task) tags.Counts {
+	c := tags.Counts{ByTag: make(map[string]int)}
+	for _, t := range tasks {
+		if t.Status != "pending" {
+			continue
+		}
+		c.All++
+		for _, tag := range t.Tags {
+			c.ByTag[tag]++
+		}
+	}
+	return c
+}
+
+// mergeKnownTags folds newly-seen tag names into the session's running set
+// of known tags and returns the sorted union, making a tag "sticky" for the
+// remainder of the session once seen with at least one pending task — the
+// same rationale as mergeKnownProjects.
+func (m *model) mergeKnownTags(names []string) []string {
+	if m.knownTags == nil {
+		m.knownTags = make(map[string]struct{})
+	}
+	for _, n := range names {
+		m.knownTags[n] = struct{}{}
+	}
+	merged := make([]string, 0, len(m.knownTags))
+	for n := range m.knownTags {
+		merged = append(merged, n)
+	}
+	sort.Strings(merged)
+	return merged
+}
+
+// distinctTags returns the sorted set of distinct tags found across tasks.
+func distinctTags(tasks []taskwarrior.Task) []string {
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, t := range tasks {
+		for _, tag := range t.Tags {
+			if _, ok := seen[tag]; ok {
+				continue
+			}
+			seen[tag] = struct{}{}
+			names = append(names, tag)
+		}
 	}
 	sort.Strings(names)
 	return names
@@ -1082,7 +1227,7 @@ func renameProject(reader TaskReader, importer TaskImporter, from, to string) te
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+	return tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1135,11 +1280,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		leftWidth, _, _, tasksHeight, bottomHeight, _ := m.gridDims()
-		projectsWidth, _ := subColumnWidths(leftWidth)
-		var listCmd, projectsCmd tea.Cmd
+		projectsWidth, tagsWidth := subColumnWidths(leftWidth)
+		var listCmd, projectsCmd, tagsCmd tea.Cmd
 		m.list, listCmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: tasksHeight})
 		m.projects, projectsCmd = m.projects.Update(tea.WindowSizeMsg{Width: projectsWidth, Height: bottomHeight})
-		return m, tea.Batch(listCmd, projectsCmd)
+		m.tags, tagsCmd = m.tags.Update(tea.WindowSizeMsg{Width: tagsWidth, Height: bottomHeight})
+		return m, tea.Batch(listCmd, projectsCmd, tagsCmd)
 	case tea.KeyMsg:
 		// Global bindings apply no matter which panel has focus: they only
 		// ever touch app lifecycle or panel focus itself, never
@@ -1204,7 +1350,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.projects, cmd = m.projects.Update(msg)
 			if label, ok := m.projects.Selected(); ok {
-				newFilter := m.filter.withProjectSelection(label)
+				if newM, refreshCmd, changed := m.applyProjectSelection(label); changed {
+					return newM, tea.Batch(cmd, refreshCmd)
+				}
+			}
+			return m, cmd
+		}
+		// Tags-panel-local: navigation (up/down/j/k) is applied directly
+		// here for the same reason as the Projects panel above — moving
+		// the cursor needs to update the shared filter and refetch Tasks
+		// immediately (no "enter" required).
+		if m.focus == focusTags {
+			var cmd tea.Cmd
+			m.tags, cmd = m.tags.Update(msg)
+			if label, ok := m.tags.Selected(); ok {
+				newFilter := m.filter.withTagSelection(label)
 				if !newFilter.equal(m.filter) {
 					m.filter = newFilter
 					return m, tea.Batch(cmd, fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
@@ -1322,10 +1482,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// wherever it already was (defaulting to AllLabel), which
 			// would show "(all)" selected while m.filter still applied
 			// the stale project filter to Tasks, making the list appear
-			// empty. Clear the filter so the visible selection and the
-			// actual task query agree.
-			m.filter = filterState{}
+			// empty. Clear the filter (via applyProjectSelection, which
+			// also resets any tag filter/scoping to match the now-cleared
+			// project) so the visible selection and the actual task query
+			// agree.
 			m.projects = m.projects.SelectLabel(projects.AllLabel)
+			if newM, cmd, changed := m.applyProjectSelection(projects.AllLabel); changed {
+				return newM, cmd
+			}
 			return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
 		}
 		m.projects = m.projects.SelectLabel(label)
@@ -1333,55 +1497,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case projectsErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
+	case tagsLoadedMsg:
+		m.tags = m.tags.SetTags(m.mergeKnownTags(msg.tags)).SetCounts(msg.counts)
+		label := m.filter.tagLabel()
+		if !m.tags.HasLabel(label) {
+			// Same rationale as the projectsLoadedMsg case above: a
+			// persisted tag filter that no longer has any pending tasks
+			// must be cleared so the visible selection and the actual
+			// task query agree.
+			m.filter.tag = nil
+			m.tags = m.tags.SelectLabel(tags.AnyLabel)
+			return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+		}
+		m.tags = m.tags.SelectLabel(label)
+		return m, nil
+	case tagsErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
 	case taskAddedMsg:
 		m.add = m.add.Reset()
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskAddErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskDoneErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskRestoredMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskRestoreErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPurgedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPrioritySetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskPriorityErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDueSetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskDueErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskProjectSetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskProjectErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -1394,18 +1575,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case undoAppliedMsg:
 		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Undo: " + msg.description})
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case undoErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case redoAppliedMsg:
 		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Redo: " + msg.description})
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case redoErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskEditErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -1417,7 +1598,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filter = newFilter
 		m.renameFrom = ""
 		m.renameTo = ""
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), saveFilter(m.filter))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), saveFilter(m.filter))
 	case projectRenameErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -1735,12 +1916,10 @@ func (m model) updateProjectPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.projects = m.projects.SelectLabel(label)
-			newFilter := m.filter.withProjectSelection(label)
-			if newFilter.equal(m.filter) {
-				return m, nil
+			if newM, cmd, changed := m.applyProjectSelection(label); changed {
+				return newM, cmd
 			}
-			m.filter = newFilter
-			return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+			return m, nil
 		}
 	}
 
@@ -2013,17 +2192,16 @@ func (m model) detailsPanelContent() string {
 // renderGrid lays out the lazygit-style panel grid: a left column of 3
 // stacked rows (Status, Tasks, and a bottom row splitting Projects/Tags
 // into side-by-side subcolumns) and one large panel (Details) filling the
-// right column. Tasks (slot 2), Projects (slot 3), and Details (slot 0)
-// have real content; Tags remains a placeholder until a later chunk.
+// right column. Tasks (slot 2), Projects (slot 3), Tags (slot 4), and
+// Details (slot 0) all have real content.
 func (m model) renderGrid() string {
-	leftWidth, rightWidth, statusHeight, _, bottomHeight, fullHeight := m.gridDims()
-	_, tagsWidth := subColumnWidths(leftWidth)
+	leftWidth, rightWidth, statusHeight, _, _, fullHeight := m.gridDims()
 
 	status := panel.Render(panelTitle(focusStatus), m.statusPanelContent(), leftWidth, statusHeight, m.focus == focusStatus)
 	tasksPanel := m.list.View()
 	projectsPanel := m.projects.View()
-	tags := panel.Render(panelTitle(focusTags), "(coming soon)", tagsWidth, bottomHeight, m.focus == focusTags)
-	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, projectsPanel, tags)
+	tagsPanel := m.tags.View()
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, projectsPanel, tagsPanel)
 
 	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, bottomRow)
 
