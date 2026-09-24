@@ -1503,6 +1503,238 @@ func TestModelUpdate_DatePickingEnterInvalidShowsWarningAndStaysOpen(t *testing.
 	assert.Equal(t, popup.Warning, msg.Severity)
 }
 
+func searchTestTasks() []taskwarrior.Task {
+	return []taskwarrior.Task{
+		{ID: 1, Description: "Buy milk"},
+		{ID: 2, Description: "Buy eggs"},
+		{ID: 3, Description: "Clean house"},
+	}
+}
+
+func TestModelUpdate_SlashKeyEntersSearching(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks())}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = newModel.(model)
+	assert.True(t, m.searching)
+	assert.True(t, m.searchInput.Focused())
+	require.NotNil(t, cmd) // textinput.Blink from Init()
+}
+
+func TestModelUpdate_SlashKeyFromTasksPanelTargetsTasks(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), focus: focusTasks}
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = newModel.(model)
+	assert.True(t, m.searching)
+	assert.Equal(t, searchScopeTasks, m.searchScope)
+}
+
+func TestModelUpdate_SlashKeyFromProjectsPanelTargetsProjects(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), focus: focusProjects}
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = newModel.(model)
+	assert.True(t, m.searching)
+	assert.Equal(t, searchScopeProjects, m.searchScope)
+}
+
+func TestModelUpdate_ProjectsSearchEnterJumpsToMatchAndAppliesFilter(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), focus: focusProjects}
+	m.projects = projects.New().SetProjects([]string{"alpha", "bravo", "charlie"})
+	m.searching = true
+	m.searchScope = searchScopeProjects
+	m.searchInput.SetValue("bravo")
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.searching)
+	label, ok := m.projects.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "bravo", label)
+	require.NotNil(t, m.filter.project)
+	assert.Equal(t, "bravo", *m.filter.project)
+}
+
+func TestModelUpdate_ProjectsPanelNextPrevMatch(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), focus: focusProjects}
+	m.projects = projects.New().SetProjects([]string{"alpha-1", "bravo", "alpha-2"})
+	m.projects, _ = m.projects.Search("alpha")
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = newModel.(model)
+	label, ok := m.projects.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "alpha-2", label)
+
+	newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	m = newModel.(model)
+	label, ok = m.projects.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "alpha-1", label)
+}
+
+func TestModelUpdate_ProjectsPanelEscClearsSearch(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), focus: focusProjects}
+	m.projects = projects.New().SetProjects([]string{"alpha", "bravo"})
+	m.projects, _ = m.projects.Search("alpha")
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.projects.HasActiveSearch())
+}
+
+func TestModelUpdate_ProjectPickerSearchEscClearsBeforeClosing(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), pickingProject: true}
+	m.projectPicker = projects.New().SetProjects([]string{"alpha", "bravo"})
+	m.projectPicker, _ = m.projectPicker.Search("alpha")
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.True(t, m.pickingProject, "first esc should only clear the search")
+	assert.False(t, m.projectPicker.HasActiveSearch())
+
+	newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.pickingProject, "second esc should close the popup")
+}
+
+func TestModelUpdate_ProjectPickerSlashStartsProjectPickerScopedSearch(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), pickingProject: true}
+	m.projectPicker = projects.New().SetProjects([]string{"alpha", "bravo"})
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = newModel.(model)
+	assert.True(t, m.searching)
+	assert.Equal(t, searchScopeProjectPicker, m.searchScope)
+
+	m.searchInput.SetValue("bravo")
+	newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.searching)
+	assert.True(t, m.pickingProject, "committing a project-picker search must not close the popup")
+	label, ok := m.projectPicker.Selected()
+	require.True(t, ok)
+	assert.Equal(t, "bravo", label)
+}
+
+func TestModelUpdate_SearchingEnterJumpsToFirstMatch(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), searching: true}
+	m.searchInput.SetValue("eggs")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.searching)
+	assert.Nil(t, cmd)
+	selected, ok := m.list.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 2, selected.ID)
+	_, popupOk := m.popups.Current()
+	assert.False(t, popupOk, "a successful search should not surface a popup")
+}
+
+func TestModelUpdate_SearchingEnterNoMatchIsSilentNoOp(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), searching: true}
+	m.searchInput.SetValue("nonexistent")
+
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.searching)
+	_, ok := m.popups.Current()
+	assert.False(t, ok, "a failed search should not surface a popup")
+	selected, selOk := m.list.Selected()
+	require.True(t, selOk)
+	assert.Equal(t, 1, selected.ID, "cursor should stay put when nothing matches")
+}
+
+func TestModelUpdate_SearchingEnterEmptyIsNoOp(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), searching: true}
+	m.searchInput.SetValue("   ")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.searching)
+	assert.Nil(t, cmd)
+	_, popupOk := m.popups.Current()
+	assert.False(t, popupOk)
+}
+
+func TestModelUpdate_SearchingEscCancels(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), searching: true}
+	m.searchInput.SetValue("eggs")
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.False(t, m.searching)
+	assert.False(t, m.searchInput.Focused())
+	assert.Nil(t, cmd)
+	selected, ok := m.list.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 1, selected.ID, "esc should not move the cursor")
+}
+
+func TestModelUpdate_SearchingEscAlsoClearsAnyActiveSearch(t *testing.T) {
+	// Commit a search, then re-open "/" and press esc while typing a new
+	// query: esc should cancel the prompt AND clear the previously active
+	// search so n/N stop navigating and highlighting disappears.
+	m := model{list: tasklist.New(searchTestTasks()), searching: true}
+	m.searchInput.SetValue("buy")
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+
+	m.searching = true
+	m.searchInput.SetValue("eggs")
+	newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+
+	_, ok := m.list.NextMatch()
+	assert.False(t, ok, "n should be a no-op once esc has cleared the active search")
+}
+
+func TestModelUpdate_EscFromTasksPanelClearsActiveSearch(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), searching: true, focus: focusTasks}
+	m.searchInput.SetValue("buy")
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newModel.(model)
+	assert.Nil(t, cmd)
+
+	_, ok := m.list.NextMatch()
+	assert.False(t, ok, "n should be a no-op once esc has cleared the active search from the Tasks panel")
+}
+
+func TestModelUpdate_NKeyAdvancesToNextMatchAfterCommittedSearch(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), searching: true}
+	m.searchInput.SetValue("buy")
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	selected, _ := m.list.Selected()
+	require.Equal(t, 1, selected.ID)
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	m = newModel.(model)
+	assert.Nil(t, cmd)
+	selected, ok := m.list.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 2, selected.ID)
+}
+
+func TestModelUpdate_ShiftNKeyMovesToPreviousMatch(t *testing.T) {
+	m := model{list: tasklist.New(searchTestTasks()), searching: true}
+	m.searchInput.SetValue("buy")
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+	m = newModel.(model)
+	assert.Nil(t, cmd)
+	selected, ok := m.list.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 2, selected.ID, "N should wrap backward to the other match")
+}
+
 func TestModelUpdate_PKeyOpensProjectPicker(t *testing.T) {
 	m := model{
 		focus:    focusTasks,

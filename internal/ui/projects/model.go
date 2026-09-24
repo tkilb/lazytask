@@ -31,6 +31,17 @@ const (
 
 var selectedRowStyle = lipgloss.NewStyle().Background(panel.SelectedRowBackground).Bold(true)
 
+// searchMatchColor/searchMatchColorUnfocused highlight the substring
+// matching an active `/` search query, mirroring the Tasks panel's search
+// highlighting (see internal/ui/tasklist): teal for the current cursor
+// row's match, yellow for every other matching row, so the row n/N are
+// jumping to/from still stands out from the rest of the matches.
+var (
+	searchMatchColor          = lipgloss.Color("6")
+	searchMatchColorUnfocused = lipgloss.Color("3")
+	searchMatchTextColor      = lipgloss.Color("0")
+)
+
 // Model is a Bubble Tea model rendering a bordered, selectable list of
 // distinct project names, plus the NoneLabel/AllLabel special entries
 // pinned to the top.
@@ -49,6 +60,7 @@ type Model struct {
 	focused      bool
 	title        string
 	reassignMode bool
+	searchQuery  string
 }
 
 // Counts carries the number of tasks behind each selectable entry, so the
@@ -187,6 +199,106 @@ func (m Model) Projects() []string {
 	return append([]string(nil), m.projects...)
 }
 
+// ClearSearch discards the active search query (if any), so the panel
+// stops highlighting matches and NextMatch/PrevMatch become no-ops again.
+// Bound to `esc` from the Projects panel (and, in the "p" quick
+// project-filter popup, only once no search is active does `esc` fall
+// through to closing the popup). It never moves the cursor.
+func (m Model) ClearSearch() Model {
+	m.searchQuery = ""
+	return m
+}
+
+// HasActiveSearch reports whether a "/" search query is currently active,
+// used by callers (e.g. the "p" quick project-filter popup) that need to
+// clear an in-progress search on a first "esc" before falling through to
+// their own "esc" semantics (e.g. closing the popup) on a second press.
+func (m Model) HasActiveSearch() bool {
+	return m.searchQuery != ""
+}
+
+// Search sets query as the active search (matched case-insensitively
+// against each entry's name, per requirements.md Phase 1's continuation
+// into the Projects panel/quick-filter popup), then jumps the cursor to
+// the nearest match at or after the current position, wrapping around to
+// the top of the list if needed. It returns the updated Model and whether
+// any match was found; the query stays recorded either way so
+// NextMatch/PrevMatch keep working (or keep silently no-op'ing) for repeat
+// n/N presses. The entry list itself is never filtered — this only ever
+// moves the cursor.
+func (m Model) Search(query string) (Model, bool) {
+	m.searchQuery = query
+	i, ok := m.findMatch(m.cursor, 1, true)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// NextMatch moves the cursor to the next entry (forward, wrapping) whose
+// name contains the active search query, bound to "n". It is a no-op
+// (returning ok=false) if there is no active query or no entry matches.
+func (m Model) NextMatch() (Model, bool) {
+	if m.searchQuery == "" {
+		return m, false
+	}
+	i, ok := m.findMatch(m.cursor, 1, false)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// PrevMatch moves the cursor to the previous entry (backward, wrapping)
+// whose name contains the active search query, bound to "N". It is a
+// no-op (returning ok=false) if there is no active query or no entry
+// matches.
+func (m Model) PrevMatch() (Model, bool) {
+	if m.searchQuery == "" {
+		return m, false
+	}
+	i, ok := m.findMatch(m.cursor, -1, false)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// findMatch scans the current entry list in direction (+1/-1) starting
+// from start, wrapping around the ends of the list, and returns the index
+// of the first entry whose name matches m.searchQuery (case-insensitive
+// substring), and true. If includeStart is true the start index itself is
+// included in the scan (used by Search's "jump to first match" semantics);
+// otherwise the scan begins one step past start (used by
+// NextMatch/PrevMatch, so repeated presses always advance rather than
+// getting stuck on the current match). Returns (0, false) if there are no
+// entries or nothing matches.
+func (m Model) findMatch(start, direction int, includeStart bool) (int, bool) {
+	entries := m.entries()
+	n := len(entries)
+	if n == 0 || m.searchQuery == "" {
+		return 0, false
+	}
+	i := start
+	if !includeStart {
+		i += direction
+	}
+	i = ((i % n) + n) % n
+	for step := 0; step < n; step++ {
+		if matchesQuery(entries[i], m.searchQuery) {
+			return i, true
+		}
+		i = ((i+direction)%n + n) % n
+	}
+	return 0, false
+}
+
+// matchesQuery reports whether name contains query as a case-insensitive
+// substring.
+func matchesQuery(name, query string) bool {
+	return strings.Contains(strings.ToLower(name), strings.ToLower(query))
+}
+
 // Selected returns the entry currently under the cursor (a project name, or
 // NoneLabel/AllLabel) and true, or "" and false if there are no entries
 // (which should not normally happen, since the two special entries are
@@ -253,11 +365,7 @@ func (m Model) View() string {
 
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		line := m.displayLine(entries[i], innerWidth)
-		if i == m.cursor {
-			line = selectedRowStyle.Render(line)
-		}
-		lines = append(lines, line)
+		lines = append(lines, m.displayLine(entries[i], innerWidth, m.searchQuery, i == m.cursor))
 	}
 	body := strings.Join(lines, "\n")
 
@@ -280,11 +388,21 @@ const countFieldWidth = 6 // fits up to "(9999)"
 
 // displayLine renders entry's full row: its name, then a fixed-width
 // "(N)" task-count field right-aligned flush against the panel's right
-// edge, so counts form a straight column down the panel.
-func (m Model) displayLine(entry string, width int) string {
+// edge, so counts form a straight column down the panel. When selected is
+// true, the row-highlight background/bold (matching selectedRowStyle) is
+// applied across the whole row. When query is non-empty (an active `/`
+// search), any substring of entry's name matching query
+// (case-insensitively) is rendered with searchMatchColor on the current
+// cursor row (selected) or searchMatchColorUnfocused on every other
+// matching row, mirroring the Tasks panel's search highlighting.
+func (m Model) displayLine(entry string, width int, query string, selected bool) string {
+	base := lipgloss.NewStyle()
+	if selected {
+		base = selectedRowStyle
+	}
 	field := countField(m.count(entry))
 	if width <= 0 {
-		return entry + " " + field
+		return base.Render(entry + " " + field)
 	}
 	// Reserve a space between name and count field; truncate the name if
 	// the combination doesn't fit the available width.
@@ -297,7 +415,48 @@ func (m Model) displayLine(entry string, width int) string {
 	if pad < 1 {
 		pad = 1
 	}
-	return name + strings.Repeat(" ", pad) + field
+	return renderWithMatches(name, query, base, selected) +
+		base.Render(strings.Repeat(" ", pad)+field)
+}
+
+// renderWithMatches renders s split around every non-overlapping,
+// case-insensitive occurrence of query: matched substrings use base with
+// searchMatchColor (on the current cursor row, selected) or
+// searchMatchColorUnfocused (every other row) as the background, never
+// bold (even on the selected row, whose base style is otherwise bold) so
+// the highlighted text always reads the same weight; everything else uses
+// base as-is. If query is empty (no active search) the whole string is
+// rendered with base, unchanged.
+func renderWithMatches(s, query string, base lipgloss.Style, selected bool) string {
+	if query == "" {
+		return base.Render(s)
+	}
+	highlight := searchMatchColorUnfocused
+	if selected {
+		highlight = searchMatchColor
+	}
+	matchStyle := base.Background(highlight).Foreground(searchMatchTextColor).Bold(false)
+
+	lowerS := strings.ToLower(s)
+	lowerQ := strings.ToLower(query)
+
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		idx := strings.Index(lowerS[i:], lowerQ)
+		if idx < 0 {
+			b.WriteString(base.Render(s[i:]))
+			break
+		}
+		idx += i
+		if idx > i {
+			b.WriteString(base.Render(s[i:idx]))
+		}
+		matchEnd := idx + len(query)
+		b.WriteString(matchStyle.Render(s[idx:matchEnd]))
+		i = matchEnd
+	}
+	return b.String()
 }
 
 // countField renders n as "(n)", right-aligned/padded to countFieldWidth.

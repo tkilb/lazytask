@@ -108,25 +108,6 @@ than a human would spend minutes:
 
 ## 7. Outstanding Phases to be Completed
 
-### Phase 1 — Vim-like `/` Search
-
-Modeled on lazygit's file-panel search (not a live-narrowing filter — the
-task list stays intact and the cursor jumps between matches):
-
-- [ ] `/` from the tasks panel opens a search prompt at the bottom, matching
-      lazygit's file-search UX.
-- [ ] The list is **not** live-filtered while typing; typing only builds the
-      query.
-- [ ] `Enter` commits the search: jump to the first match and keep the
-      search active for repeat navigation.
-- [ ] `n` moves to the next match forward; `N` moves to the previous match
-      backward.
-- [ ] Matches against the task **description only** (not project/tags/
-      annotations).
-- [ ] No reverse-search key (`?`) — `/` is the only entry point.
-- [ ] Search history (recalling previous queries) is explicitly out of
-      scope for this phase — open question, not required to ship.
-
 ### Phase 2 — Bug Fixes
 
 - [ ] **Undo failing to undo edits** — undo does not correctly revert edits
@@ -151,6 +132,7 @@ Tags panel (key 4) has already shipped. Remaining scope:
       If keyed in, there will be a comma delimited list and the mode will be replacement instead.
 - [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
 - [ ] Add tags to the add form, should come before due date
+- [ ] Add '/' search to tags just like as seen in projects
 
 ### Phase 4 — UX Enhancements
 

@@ -310,7 +310,7 @@ func TestRenderDataRow_ColorsOnlyPriorityCell(t *testing.T) {
 
 	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home", Priority: "H", Due: "2026-09-20"}
 
-	row := renderDataRow(80, task, false)
+	row := renderDataRow(80, task, false, "")
 
 	priorityCell := lipgloss.NewStyle().Foreground(panel.PriorityHighColor).Render(
 		fmt.Sprintf("%-*s", 4, "H"),
@@ -324,6 +324,65 @@ func TestRenderDataRow_ColorsOnlyPriorityCell(t *testing.T) {
 	plainDescCell := fmt.Sprintf("%-*s", descWidth, "Buy groceries")
 	coloredDescCell := lipgloss.NewStyle().Foreground(panel.PriorityHighColor).Render(plainDescCell)
 	assert.NotContains(t, row, coloredDescCell)
+}
+
+func TestRenderDataRow_HighlightsSearchMatchSubstringOnCursorRow(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home"}
+
+	row := renderDataRow(80, task, true, "groc")
+
+	// Even on the selected (bold) cursor row, the matched substring itself
+	// must never be bold.
+	matchStyle := lipgloss.NewStyle().Background(panel.SelectedRowBackground).Bold(true).
+		Background(searchMatchColor).Foreground(lipgloss.Color("0")).Bold(false)
+	assert.Contains(t, row, matchStyle.Render("groc"))
+}
+
+func TestRenderDataRow_HighlightIsCaseInsensitive(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	task := taskwarrior.Task{ID: 1, Description: "Buy Groceries", Project: "Home"}
+
+	row := renderDataRow(80, task, true, "groceries")
+
+	matchStyle := lipgloss.NewStyle().Background(panel.SelectedRowBackground).Bold(true).
+		Background(searchMatchColor).Foreground(lipgloss.Color("0")).Bold(false)
+	assert.Contains(t, row, matchStyle.Render("Groceries"))
+}
+
+func TestRenderDataRow_HighlightUsesUnfocusedColorOnNonCursorRow(t *testing.T) {
+	// A match on a row other than the one the cursor is on (selected=false)
+	// uses searchMatchColorUnfocused (yellow) instead of searchMatchColor
+	// (teal), so the current cursor row still stands out from the rest of
+	// the matches.
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home"}
+
+	row := renderDataRow(80, task, false, "groc")
+
+	focusedStyle := lipgloss.NewStyle().Background(searchMatchColor).Foreground(lipgloss.Color("0"))
+	unfocusedStyle := lipgloss.NewStyle().Background(searchMatchColorUnfocused).Foreground(lipgloss.Color("0"))
+	assert.Contains(t, row, unfocusedStyle.Render("groc"))
+	assert.NotContains(t, row, focusedStyle.Render("groc"))
+}
+
+func TestRenderDataRow_NoQueryLeavesDescriptionUnstyled(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home"}
+
+	row := renderDataRow(80, task, false, "")
+
+	// With no active search and no priority/selection styling, the row is
+	// plain text with no ANSI escape codes at all.
+	assert.NotContains(t, row, "\x1b[")
 }
 
 func TestSetTasks_SortsByUrgencyDescending(t *testing.T) {
@@ -396,4 +455,99 @@ func TestNeighbor_NoNeighborPastListBounds(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = m.Neighbor(-1)
 	assert.False(t, ok)
+}
+
+func TestSearch_JumpsToFirstMatchAtOrAfterCursor(t *testing.T) {
+	m := New(sampleTasks())
+
+	m, found := m.Search("water")
+	require.True(t, found)
+	selected, ok := m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 3, selected.ID)
+}
+
+func TestSearch_CaseInsensitive(t *testing.T) {
+	m := New(sampleTasks())
+
+	m, found := m.Search("REPORT")
+	require.True(t, found)
+	selected, ok := m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 2, selected.ID)
+}
+
+func TestSearch_NoMatch_ReturnsFalseAndLeavesCursor(t *testing.T) {
+	m := New(sampleTasks())
+
+	m, found := m.Search("nonexistent")
+	assert.False(t, found)
+	selected, ok := m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, 1, selected.ID, "cursor should stay put when nothing matches")
+}
+
+func TestSearch_MatchesDescriptionOnly_NotProject(t *testing.T) {
+	m := New(sampleTasks())
+
+	// "Home" is a project on tasks 1 and 3, but no description contains it.
+	m, found := m.Search("home")
+	assert.False(t, found)
+	_ = m
+}
+
+func TestNextMatch_AdvancesPastCurrentAndWraps(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "buy milk"},
+		{ID: 2, Description: "buy eggs"},
+		{ID: 3, Description: "clean house"},
+	}
+	m := New(tasks)
+
+	m, found := m.Search("buy")
+	require.True(t, found)
+	selected, _ := m.Selected()
+	assert.Equal(t, 1, selected.ID)
+
+	m, found = m.NextMatch()
+	require.True(t, found)
+	selected, _ = m.Selected()
+	assert.Equal(t, 2, selected.ID, "n should advance to the next match, not stay put")
+
+	// Wraps back around to the first match since task 3 doesn't match.
+	m, found = m.NextMatch()
+	require.True(t, found)
+	selected, _ = m.Selected()
+	assert.Equal(t, 1, selected.ID)
+}
+
+func TestPrevMatch_WrapsBackward(t *testing.T) {
+	tasks := []taskwarrior.Task{
+		{ID: 1, Description: "buy milk"},
+		{ID: 2, Description: "buy eggs"},
+		{ID: 3, Description: "clean house"},
+	}
+	m := New(tasks)
+
+	m, found := m.Search("buy")
+	require.True(t, found)
+
+	m, found = m.PrevMatch()
+	require.True(t, found)
+	selected, _ := m.Selected()
+	assert.Equal(t, 2, selected.ID, "N should wrap backward to the previous match")
+}
+
+func TestNextMatch_NoActiveQuery_IsNoOp(t *testing.T) {
+	m := New(sampleTasks())
+
+	_, found := m.NextMatch()
+	assert.False(t, found)
+}
+
+func TestPrevMatch_NoActiveQuery_IsNoOp(t *testing.T) {
+	m := New(sampleTasks())
+
+	_, found := m.PrevMatch()
+	assert.False(t, found)
 }

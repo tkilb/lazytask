@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -196,4 +198,81 @@ func TestModel_View_ScrollsToKeepCursorVisible(t *testing.T) {
 	assert.Contains(t, view, "project-19")
 	assert.NotContains(t, view, AllLabel)
 	assert.Contains(t, view, "22 of 22")
+}
+
+func TestModel_SearchJumpsToFirstMatch(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work-alpha", "work-beta"})
+
+	m, ok := m.Search("work")
+	require.True(t, ok)
+	label, _ := m.Selected()
+	assert.Equal(t, "work-alpha", label)
+	assert.True(t, m.HasActiveSearch())
+}
+
+func TestModel_SearchNoMatchIsNoOpButRecordsQuery(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"})
+
+	m, ok := m.Search("nonexistent")
+	assert.False(t, ok)
+	label, _ := m.Selected()
+	assert.Equal(t, AllLabel, label, "cursor stays put on a no-match search")
+	assert.True(t, m.HasActiveSearch())
+}
+
+func TestModel_NextMatchAndPrevMatchWrap(t *testing.T) {
+	m := New().SetProjects([]string{"alpha-1", "beta", "alpha-2"})
+	m, _ = m.Search("alpha")
+
+	label, _ := m.Selected()
+	assert.Equal(t, "alpha-1", label)
+
+	m, ok := m.NextMatch()
+	require.True(t, ok)
+	label, _ = m.Selected()
+	assert.Equal(t, "alpha-2", label)
+
+	// Wraps back around to the first match.
+	m, ok = m.NextMatch()
+	require.True(t, ok)
+	label, _ = m.Selected()
+	assert.Equal(t, "alpha-1", label)
+
+	m, ok = m.PrevMatch()
+	require.True(t, ok)
+	label, _ = m.Selected()
+	assert.Equal(t, "alpha-2", label)
+}
+
+func TestModel_NextPrevMatchNoOpWithoutActiveSearch(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"})
+
+	_, ok := m.NextMatch()
+	assert.False(t, ok)
+	_, ok = m.PrevMatch()
+	assert.False(t, ok)
+}
+
+func TestModel_ClearSearchStopsHighlightingAndMatching(t *testing.T) {
+	m := New().SetProjects([]string{"home", "work"})
+	m, _ = m.Search("work")
+	require.True(t, m.HasActiveSearch())
+
+	m = m.ClearSearch()
+	assert.False(t, m.HasActiveSearch())
+	_, ok := m.NextMatch()
+	assert.False(t, ok)
+}
+
+func TestModel_View_HighlightsSearchMatch(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	m := New().SetProjects([]string{"home", "work"})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	m, _ = m.Search("work")
+
+	view := m.View()
+	matchStyle := lipgloss.NewStyle().Background(searchMatchColor).Foreground(searchMatchTextColor).Bold(false)
+	assert.Contains(t, view, matchStyle.Render("work"))
 }

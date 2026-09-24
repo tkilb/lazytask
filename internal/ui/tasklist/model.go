@@ -65,6 +65,17 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("245"))
 
+	// searchMatchColor is the background used to highlight the substring
+	// that matched the active `/` search query within the current cursor
+	// row's Description cell. Teal, kept visually distinct from
+	// panel.SelectedRowBackground (blue) and the priority colors (red/
+	// yellow/cyan) so it reads clearly even on the current cursor row.
+	searchMatchColor = lipgloss.Color("6")
+	// searchMatchColorUnfocused is used for the same search-match
+	// highlight on every row other than the current cursor row, so the
+	// row you're actually on (and where n/N are jumping to/from) still
+	// stands out from the rest of the matches.
+	searchMatchColorUnfocused = lipgloss.Color("3")
 )
 
 // priorityColor returns the row foreground color for a task's priority
@@ -87,12 +98,13 @@ func priorityColor(priority string) lipgloss.Color {
 // Model is a Bubble Tea model rendering a bordered, selectable list of
 // taskwarrior tasks.
 type Model struct {
-	tasks   []taskwarrior.Task
-	cursor  int
-	width   int
-	height  int
-	focused bool
-	status  StatusTab
+	tasks       []taskwarrior.Task
+	cursor      int
+	width       int
+	height      int
+	focused     bool
+	status      StatusTab
+	searchQuery string
 }
 
 // New constructs a Model over the given tasks. The list starts with the
@@ -171,6 +183,96 @@ func (m Model) Neighbor(delta int) (taskwarrior.Task, bool) {
 		return taskwarrior.Task{}, false
 	}
 	return m.tasks[i], true
+}
+
+// ClearSearch discards the active search query (if any), so the Tasks
+// panel stops highlighting matches and n/N become no-ops again, bound to
+// `esc` from the Tasks panel while a search is active. It never moves the
+// cursor.
+func (m Model) ClearSearch() Model {
+	m.searchQuery = ""
+	return m
+}
+
+// Search sets query as the active search (matched case-insensitively
+// against each task's Description only, per requirements.md Phase 1), then
+// jumps the cursor to the nearest match at or after the current position,
+// wrapping around to the top of the list if needed. It returns the updated
+// Model and whether any match was found; the query stays recorded either
+// way so NextMatch/PrevMatch keep working (or keep silently no-op'ing) for
+// repeat n/N presses, matching lazygit's file-search UX where the search
+// stays "active" after a commit. The list itself is never filtered — this
+// only ever moves the cursor.
+func (m Model) Search(query string) (Model, bool) {
+	m.searchQuery = query
+	i, ok := m.findMatch(m.cursor, 1, true)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// NextMatch moves the cursor to the next task (forward, wrapping) whose
+// Description contains the active search query, bound to "n". It is a
+// no-op (returning ok=false) if there is no active query or no task
+// matches.
+func (m Model) NextMatch() (Model, bool) {
+	if m.searchQuery == "" {
+		return m, false
+	}
+	i, ok := m.findMatch(m.cursor, 1, false)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// PrevMatch moves the cursor to the previous task (backward, wrapping)
+// whose Description contains the active search query, bound to "N". It is
+// a no-op (returning ok=false) if there is no active query or no task
+// matches.
+func (m Model) PrevMatch() (Model, bool) {
+	if m.searchQuery == "" {
+		return m, false
+	}
+	i, ok := m.findMatch(m.cursor, -1, false)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// findMatch scans m.tasks in direction (+1/-1) starting from start,
+// wrapping around the ends of the list, and returns the index of the first
+// task whose Description matches m.searchQuery (case-insensitive substring),
+// and true. If includeStart is true the start index itself is included in
+// the scan (used by Search's "jump to first match" semantics); otherwise
+// the scan begins one step past start (used by NextMatch/PrevMatch, so
+// repeated presses always advance rather than getting stuck on the current
+// match). Returns (0, false) if m.tasks is empty or nothing matches.
+func (m Model) findMatch(start, direction int, includeStart bool) (int, bool) {
+	n := len(m.tasks)
+	if n == 0 || m.searchQuery == "" {
+		return 0, false
+	}
+	i := start
+	if !includeStart {
+		i += direction
+	}
+	i = ((i % n) + n) % n
+	for step := 0; step < n; step++ {
+		if matchesQuery(m.tasks[i].Description, m.searchQuery) {
+			return i, true
+		}
+		i = ((i+direction)%n + n) % n
+	}
+	return 0, false
+}
+
+// matchesQuery reports whether desc contains query as a case-insensitive
+// substring.
+func matchesQuery(desc, query string) bool {
+	return strings.Contains(strings.ToLower(desc), strings.ToLower(query))
 }
 
 // SetFocused records whether the Tasks panel currently has focus in the
@@ -269,7 +371,7 @@ func (m Model) View() string {
 		start, end := panel.ScrollWindow(m.cursor, len(m.tasks), visibleRows)
 		for i := start; i < end; i++ {
 			t := m.tasks[i]
-			row := renderDataRow(innerWidth, t, i == m.cursor)
+			row := renderDataRow(innerWidth, t, i == m.cursor, m.searchQuery)
 			b.WriteString(row)
 			if i < end-1 {
 				b.WriteString("\n")
@@ -328,7 +430,12 @@ func columnWidths(width int) (idWidth, descWidth, projectWidth, priorityWidth, d
 // Due column. When selected is true, the row-highlight background/bold
 // (matching panel.SelectedRowBackground) is applied across every cell and
 // the inter-column spacing so the highlight still reads as a full-row bar.
-func renderDataRow(width int, t taskwarrior.Task, selected bool) string {
+// When query is non-empty (an active `/` search), any substring of the
+// Description matching query (case-insensitively) is rendered with
+// searchMatchColor on the current cursor row (selected) or
+// searchMatchColorUnfocused on every other matching row, so every visible
+// match is obvious while the current one still stands out.
+func renderDataRow(width int, t taskwarrior.Task, selected bool, query string) string {
 	idWidth, descWidth, projectWidth, priorityWidth, dueWidth := columnWidths(width)
 
 	base := lipgloss.NewStyle()
@@ -344,11 +451,72 @@ func renderDataRow(width int, t taskwarrior.Task, selected bool) string {
 	sep := base.Render(" ")
 	return strings.Join([]string{
 		base.Render(pad(fmt.Sprintf("%d", t.ID), idWidth)),
-		base.Render(pad(t.Description, descWidth)),
+		renderDescriptionCell(t.Description, descWidth, query, base, selected),
 		base.Render(pad(t.Project, projectWidth)),
 		priorityStyle.Render(pad(t.Priority, priorityWidth)),
 		base.Render(pad(t.Due, dueWidth)),
 	}, sep)
+}
+
+// renderDescriptionCell renders the Description column for one row: it
+// truncates/pads the text to w exactly like the other cells (via pad in
+// renderDataRow), but when query is non-empty it splits the truncated text
+// around case-insensitive matches of query and renders the matched
+// portions with searchMatchColor/searchMatchColorUnfocused, leaving the
+// rest styled as base (so selected-row bold/background still applies to
+// the whole cell).
+func renderDescriptionCell(desc string, w int, query string, base lipgloss.Style, selected bool) string {
+	truncated := truncate(desc, w)
+	pad := w - len(truncated)
+	if pad < 0 {
+		pad = 0
+	}
+
+	rendered := renderWithMatches(truncated, query, base, selected)
+	if pad > 0 {
+		rendered += base.Render(strings.Repeat(" ", pad))
+	}
+	return rendered
+}
+
+// renderWithMatches renders s split around every non-overlapping,
+// case-insensitive occurrence of query: matched substrings use base with
+// searchMatchColor (on the current cursor row, selected) or
+// searchMatchColorUnfocused (every other row) as the background, never
+// bold (even on the selected row, whose base style is otherwise bold) so
+// the highlighted text always reads the same weight; everything else uses
+// base as-is. If query is empty (no active search) the whole string is
+// rendered with base, unchanged.
+func renderWithMatches(s, query string, base lipgloss.Style, selected bool) string {
+	if query == "" {
+		return base.Render(s)
+	}
+	highlight := searchMatchColorUnfocused
+	if selected {
+		highlight = searchMatchColor
+	}
+	matchStyle := base.Background(highlight).Foreground(lipgloss.Color("0")).Bold(false)
+
+	lowerS := strings.ToLower(s)
+	lowerQ := strings.ToLower(query)
+
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		idx := strings.Index(lowerS[i:], lowerQ)
+		if idx < 0 {
+			b.WriteString(base.Render(s[i:]))
+			break
+		}
+		idx += i
+		if idx > i {
+			b.WriteString(base.Render(s[i:idx]))
+		}
+		matchEnd := idx + len(query)
+		b.WriteString(matchStyle.Render(s[idx:matchEnd]))
+		i = matchEnd
+	}
+	return b.String()
 }
 
 // truncate shortens s to fit within width, adding an ellipsis if it was cut.

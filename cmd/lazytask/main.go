@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -55,6 +56,18 @@ var panelKeyBindings = map[string]panelFocus{
 // focusCycle is the Tab/Shift+Tab traversal order: top-to-bottom through
 // the left column, then the right column's single large panel.
 var focusCycle = []panelFocus{focusStatus, focusTasks, focusProjects, focusTags, focusDetails}
+
+// searchScope identifies which list a "/" search prompt (see m.searching)
+// currently applies to, since the prompt/input state is shared across the
+// Tasks panel, the Projects panel, and the "p" quick project-filter
+// popup (requirements.md Phase 1's continuation into Projects).
+type searchScope int
+
+const (
+	searchScopeTasks searchScope = iota
+	searchScopeProjects
+	searchScopeProjectPicker
+)
 
 // panelTitle returns the display title for a given panel, including its
 // number-key hint (lazygit-style).
@@ -144,6 +157,8 @@ var tasksLocalBindings = []statusbar.Binding{
 	{Key: "D", Label: "due date"},
 	{Key: "p", Label: "project filter"},
 	{Key: "ctrl+j/k", Label: "reorder"},
+	{Key: "/", Label: "search"},
+	{Key: "n/N", Label: "next/prev match"},
 }
 
 // projectsLocalBindings are only active while the Projects panel has
@@ -518,6 +533,9 @@ type model struct {
 	reassignPicker projects.Model
 	reassignTyping bool
 	reassignInput  addform.Model
+	searching      bool
+	searchInput    textinput.Model
+	searchScope    searchScope
 	popups         popup.Model
 	quitting       bool
 	pendingFocusID int
@@ -1274,6 +1292,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.reassignTyping {
 		return m.updateReassignTyping(msg)
 	}
+	if m.searching {
+		return m.updateSearching(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1345,6 +1366,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.renameInput = addform.NewNamed("Rename Project", "Press <enter> to rename, <esc> to cancel", "New project name...").Focus().SetValue(label)
 					return m, m.renameInput.Init()
 				}
+				return m, nil
+			}
+			switch msg.String() {
+			case "/":
+				var cmd tea.Cmd
+				m, cmd = m.startSearch("search projects...", searchScopeProjects)
+				return m, cmd
+			case "n":
+				if newProjects, ok := m.projects.NextMatch(); ok {
+					m.projects = newProjects
+					return m.afterProjectsCursorMove()
+				}
+				return m, nil
+			case "N":
+				if newProjects, ok := m.projects.PrevMatch(); ok {
+					m.projects = newProjects
+					return m.afterProjectsCursorMove()
+				}
+				return m, nil
+			case "esc":
+				m.projects = m.projects.ClearSearch()
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -1459,6 +1501,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, reorderTask(m.reranker, task, neighbor, false)
 				}
 			}
+			return m, nil
+		case "/":
+			var cmd tea.Cmd
+			m, cmd = m.startSearch("search description...", searchScopeTasks)
+			return m, cmd
+		case "n":
+			if newList, ok := m.list.NextMatch(); ok {
+				m.list = newList
+			}
+			return m, nil
+		case "N":
+			if newList, ok := m.list.PrevMatch(); ok {
+				m.list = newList
+			}
+			return m, nil
+		case "esc":
+			m.list = m.list.ClearSearch()
 			return m, nil
 		}
 	case tasksLoadedMsg:
@@ -1901,12 +1960,35 @@ func projectPickerSize(entryCount int) (width, height int) {
 // popup (opened via "p" from the Tasks panel) is active. Unlike the
 // Projects panel itself, moving the cursor here doesn't touch the shared
 // filter live — it's only applied on "enter" — so "esc" cleanly discards
-// an in-progress selection without side effects.
+// an in-progress selection without side effects (or, while a "/" search is
+// active, clears the search first, only closing the popup on a second
+// "esc" — matching lazygit's "innermost thing first" escape convention).
 func (m model) updateProjectPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.searching {
+		return m.updateSearching(msg)
+	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "/":
+			var cmd tea.Cmd
+			m, cmd = m.startSearch("search projects...", searchScopeProjectPicker)
+			return m, cmd
+		case "n":
+			if newPicker, ok := m.projectPicker.NextMatch(); ok {
+				m.projectPicker = newPicker
+			}
+			return m, nil
+		case "N":
+			if newPicker, ok := m.projectPicker.PrevMatch(); ok {
+				m.projectPicker = newPicker
+			}
+			return m, nil
 		case "esc":
+			if m.projectPicker.HasActiveSearch() {
+				m.projectPicker = m.projectPicker.ClearSearch()
+				return m, nil
+			}
 			m.pickingProject = false
 			return m, nil
 		case "enter":
@@ -2001,6 +2083,108 @@ func (m model) updateReassignTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// startSearch begins a "/" search prompt targeting scope (the Tasks panel,
+// Projects panel, or "p" quick project-filter popup — see searchScope),
+// focusing a fresh textinput.Model with placeholder as its hint text. The
+// caller is responsible for returning the resulting tea.Cmd so the input
+// actually receives focus.
+func (m model) startSearch(placeholder string, scope searchScope) (model, tea.Cmd) {
+	ti := textinput.New()
+	ti.Prompt = "/"
+	ti.Placeholder = placeholder
+	ti.CharLimit = 256
+	cmd := ti.Focus()
+	m.searchInput = ti
+	m.searching = true
+	m.searchScope = scope
+	return m, cmd
+}
+
+// updateSearching handles messages while the "/" search prompt (opened from
+// the Tasks panel) is focused. Per requirements.md Phase 1, the list is
+// never live-filtered while typing; "enter" is what commits the query,
+// jumping to the first match and leaving the query active so "n"/"N" keep
+// navigating afterward. An empty query is a silent no-op (no search is
+// started); a committed query with no match is also a silent no-op — the
+// cursor simply stays put, with no popup interrupting the flow. "esc"
+// cancels the prompt and also clears any active search query (committed or
+// still being typed), so match highlighting disappears immediately,
+// matching lazygit. The prompt itself renders inline at the very bottom of
+// the screen (see baseView), temporarily replacing the status bar's key
+// hints while typing, lazygit-style. Which underlying list "enter"/"esc"
+// apply to is determined by m.searchScope, set when the prompt was opened
+// (see startSearch), so the same prompt/input state can be reused for the
+// Tasks panel, the Projects panel, and the "p" quick project-filter popup.
+func (m model) updateSearching(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.searching = false
+			m.searchInput.Blur()
+			m.clearSearch()
+			return m, nil
+		case "enter":
+			query := strings.TrimSpace(m.searchInput.Value())
+			m.searching = false
+			m.searchInput.Blur()
+			if query == "" {
+				return m, nil
+			}
+			m.applySearch(query)
+			if m.searchScope == searchScopeProjects {
+				return m.afterProjectsCursorMove()
+			}
+			return m, nil
+		}
+	}
+
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+	return m, cmd
+}
+
+// afterProjectsCursorMove re-applies the Projects panel's
+// filter-follows-cursor behavior (see applyProjectSelection) after a
+// cursor jump that isn't routed through projects.Model.Update itself —
+// namely a "/" search commit or an "n"/"N" match jump — so the shared
+// task/tag filter stays in sync with the newly selected entry exactly as
+// it would after a plain up/down keypress.
+func (m model) afterProjectsCursorMove() (model, tea.Cmd) {
+	if label, ok := m.projects.Selected(); ok {
+		if newM, cmd, changed := m.applyProjectSelection(label); changed {
+			return newM, cmd
+		}
+	}
+	return m, nil
+}
+
+// applySearch commits query as the active search against whichever list
+// m.searchScope points at.
+func (m *model) applySearch(query string) {
+	switch m.searchScope {
+	case searchScopeProjects:
+		m.projects, _ = m.projects.Search(query)
+	case searchScopeProjectPicker:
+		m.projectPicker, _ = m.projectPicker.Search(query)
+	default:
+		m.list, _ = m.list.Search(query)
+	}
+}
+
+// clearSearch discards the active search query on whichever list
+// m.searchScope points at.
+func (m *model) clearSearch() {
+	switch m.searchScope {
+	case searchScopeProjects:
+		m.projects = m.projects.ClearSearch()
+	case searchScopeProjectPicker:
+		m.projectPicker = m.projectPicker.ClearSearch()
+	default:
+		m.list = m.list.ClearSearch()
+	}
+}
+
 // screenDims returns the model's last known terminal size, falling back to
 // the same defaults gridDims() uses when no tea.WindowSizeMsg has arrived
 // yet (e.g. in tests calling View() directly).
@@ -2020,10 +2204,17 @@ func (m model) screenDims() (width, height int) {
 // underneath it, ignoring the adding/popup overlays layered on top by
 // View(). This is the "background" the add-task box and any popup are
 // composited over, so the rest of the UI stays visible behind them instead
-// of being replaced by a blank screen.
+// of being replaced by a blank screen. While a "/" search is being typed,
+// the bottom line temporarily shows the search prompt in place of the
+// status bar's key hints (lazygit's file-search UX), restoring the hints
+// once the search is committed or cancelled.
 func (m model) baseView() string {
 	view := m.renderGrid()
-	view += "\n" + statusbar.Render(m.statusBindings()) + "\n"
+	if m.searching {
+		view += "\n" + m.searchInput.View() + "\n"
+	} else {
+		view += "\n" + statusbar.Render(m.statusBindings()) + "\n"
+	}
 	return view
 }
 
