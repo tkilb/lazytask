@@ -108,34 +108,65 @@ than a human would spend minutes:
 
 ## 7. Outstanding Phases to be Completed
 
-### Phase 6 - Advanced Wizards
+### Phase 1 — Vim-like `/` Search
 
-- [x] Make an new component that will allow the user to quickly pick a due date.
-      The idea is we want a cord like '2d' for two days from now and '1w' for on week from now.
-      '2b' will be two business days from now, assume Sat and Sun are not business days.
-      (Implemented in `internal/dateparse` + `internal/ui/datepick`; also accepts
-      flexible US/international absolute dates — e.g. `3/14`, `3-14`, `3.14`,
-      `3-14-2026`, `2026-03-14` — with optional leading zeros and future-only
-      rollover for the 2-part MM-DD shorthand.)
-- [x] 'p' from the tasks panel will open a popup for a quick project picker for filtering
-- [x] 'P' from the tasks panel will open a popup for project re-assign, allow for existing project to be selected from a list
-      or a new one to be keyed in
-      or a new one to be keyed in
-- [x] 'D' will make use of the date component for the selected task. cord shortcuts may be used for a quick date or have the option for a custom date key in
-- [x] Add will now have additional fields for project, priority and due date.
+Modeled on lazygit's file-panel search (not a live-narrowing filter — the
+task list stays intact and the cursor jumps between matches):
 
-### Phase 7 — Tags
+- [ ] `/` from the tasks panel opens a search prompt at the bottom, matching
+      lazygit's file-search UX.
+- [ ] The list is **not** live-filtered while typing; typing only builds the
+      query.
+- [ ] `Enter` commits the search: jump to the first match and keep the
+      search active for repeat navigation.
+- [ ] `n` moves to the next match forward; `N` moves to the previous match
+      backward.
+- [ ] Matches against the task **description only** (not project/tags/
+      annotations).
+- [ ] No reverse-search key (`?`) — `/` is the only entry point.
+- [ ] Search history (recalling previous queries) is explicitly out of
+      scope for this phase — open question, not required to ship.
 
-- [x] **Tags panel (key 4)** — same pattern as the Projects panel, built on the
-      existing filter-state infra: lists distinct tags, with an `(any)` entry
-      first (wrapped in `*`), selecting a tag sets a `+tag` filter, sourced from
-      the same unfiltered query as Projects. Pending sign-off/implementation
+### Phase 2 — Bug Fixes
+
+- [ ] **Undo failing to undo edits** — undo does not correctly revert edits
+      made to a task.
+- [ ] **Edit: `m` → `M` for priority** — fix the edit-form logic so
+      lowercase `m` is normalized/mapped to the `M` (medium) priority value
+      taskwarrior expects.
+- [ ] **Resolve shorthand dates in edit, same as add popup** — the edit flow
+      should reuse the existing `internal/dateparse` shorthand resolution
+      (e.g. `2d`, `1w`, `2b`) that the add popup already supports, instead of
+      requiring literal dates.
+- [ ] **Task panel must account for multi-line line breaks** — task
+      descriptions/annotations containing embedded newlines currently break
+      the tasks panel's row rendering; needs correct height
+      calculation/wrapping.
+
+### Phase 3 — Tags (continuation)
+
+Tags panel (key 4) has already shipped. Remaining scope:
+
 - [ ] 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
       If keyed in, there will be a comma delimited list and the mode will be replacement instead.
 - [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
 - [ ] Add tags to the add form, should come before due date
 
-### Phase 9 — Low Priority
+### Phase 4 — UX Enhancements
+
+- [ ] **Redo status bar, maybe rename to "suggested"** — revisit the status
+      bar's current design/labeling.
+- [ ] **Better tasklist column headers and date display** — improve column
+      header clarity and how due/other dates are formatted in the task list.
+- [ ] **Purge all** — bulk-purge action for tasks (needs scope/safety
+      clarification before chunking — see Section 5's ask-before-assuming
+      rule).
+- [ ] **Keyboard hints popup via `?`** — a help overlay listing current key
+      bindings.
+- [ ] **Funnel for adhoc tasks** — a quick-capture flow for one-off/adhoc
+      tasks (needs scope clarification before chunking).
+
+### Phase 5 — Remote Task Data
 
 - **Remote task data** - Allow for a remote mode an local mode for tasks state.
   Approach: use taskwarrior/TaskChampion's native **git sync backend**
@@ -158,7 +189,7 @@ than a human would spend minutes:
     taskwarrior config alone. Needs a decision on how/when this maintenance
     runs (triggered from lazytask vs. an external cron) before chunking.
 
-#### Phase 8 design notes — git history purge routine
+#### Phase 5 design notes — git history purge routine
 
 Investigated directly against TaskChampion's `src/server/gitsync/mod.rs` (as
 of the commit that added git-sync support, `task` 3.5.0 / PR #4111), for the
@@ -230,10 +261,12 @@ here):**
   history-rewriting operation is riskier to run inside the TUI process's
   own lifecycle.
 - Retention window (7 days) should probably be YAML-configurable rather
-  than hardcoded, consistent with the rest of Phase 8's config-driven
+  than hardcoded, consistent with the rest of Phase 5's config-driven
   items.
 
-### Phase 9 — Low Priority
+### Phase 6 — Configurable Keymaps & Custom User Actions
+
+Always last, per standing instruction.
 
 - **Configurable keymaps via YAML** — user-overridable key bindings for
   existing actions (list nav, add/done/delete/edit), loaded via the existing
