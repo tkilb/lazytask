@@ -133,50 +133,85 @@ diff` reflect exactly what's landed so far but not yet committed):**
       `updateAdding`'s submit path still only reads
       Description/Project/Priority/Due. Do not consider the Add popup
       "done" until this is wired (see Chunk 3 below).
-- [ ] **Chunk 3 (persistence + $EDITOR edit-buffer) — NOT STARTED.** Needed:
-      - A new mutation, e.g. `TaskAnnotator`/`Client.Annotate(ctx, id,
-        text)` in `internal/taskwarrior/mutations.go` + a matching narrow
-        interface in `cmd/lazytask/main.go` (same pattern as
-        `TaskDueSetter`/`TaskProjectSetter` etc.), likely shelling out to
-        `task <id> annotate <text>` (check whether multi-line text needs
-        special quoting/handling through the `task` CLI — verify with a
-        real `task` binary).
-      - Wire it into the **Add popup's** submit path (`updateAdding` in
-        `cmd/lazytask/main.go`): after `addTask` succeeds and returns the
-        new task's ID, if `m.add.Annotations()` is non-empty, issue the
-        Annotate call (likely split multi-line input into one taskwarrior
-        annotation per line, or one annotation with embedded newlines —
-        needs a decision/check against how `task annotate` handles `\n`).
-      - Wire it into the **`$EDITOR` edit-buffer flow**
-        (`internal/editbuffer` + `e`-key handling in
-        `cmd/lazytask/main.go`'s `editTask`/`editTaskCallback`): extend
-        `editbuffer.Serialize`/`Parse`/`Apply`/`EditableFields` to add an
-        `Annotations:` section (plural, since a task may have many,
-        each with its own Entry timestamp — decide the buffer's textual
-        format, e.g. one `- <text>` line per annotation, before
-        implementing) so editing an existing task's annotations round-trips
-        through the external editor. This will likely need
-        `Client.Annotate`/a denotate-equivalent to reconcile
-        added/removed/edited annotations against taskwarrior, since
-        `task import` alone may not touch annotations the way it does
-        Description/Project/etc. — **verify against a real `task` binary
-        before assuming import semantics.**
-      - This is intentionally one chunk (not split further) because the
-        Annotate mutation is shared plumbing both the Add popup and the
-        edit-buffer flow need — build it once.
-- [ ] **Chunk 4 — Task panel multi-line rendering — NOT STARTED.**
-      **Task panel must account for multi-line line breaks** — task
-      descriptions/annotations containing embedded newlines currently break
-      the tasks panel's row rendering; needs correct height
-      calculation/wrapping. Depends on Chunk 3 existing so there's actually
-      annotation data to render, though the description-newline part of
-      this could in principle be tackled standalone.
+- [x] **Chunk 3 (persistence + $EDITOR edit-buffer)** — done, verified
+      against a real `task` 3.5.0 binary (not just unit tests):
+      - `Client.Annotate(ctx, id, text)` added to
+        `internal/taskwarrior/mutations.go` (+ `TaskMutator` interface) —
+        shells out to `task <id> annotate <text>`; embedded newlines in
+        `text` are passed straight through (`task` stores them verbatim in
+        the JSON `description` field), so no special quoting was needed.
+      - **Add popup**: `TaskAnnotator` interface + `model.annotator` field
+        added in `cmd/lazytask/main.go`; `addTask` now takes the form's
+        `Annotations()` text and, once `Add` succeeds, calls `Annotate`
+        once per non-blank line (`splitAnnotationLines`) against the new
+        task's numeric ID. Wired at the `updateAdding` "enter" submit
+        branch.
+      - **`$EDITOR` edit-buffer**: `internal/editbuffer` gained an
+        `Annotations:` section (one `- <text>` line per annotation, right
+        after `Description:`; embedded newlines within a single
+        annotation are escaped as literal `\n` on Serialize and unescaped
+        on Parse, rather than using Description's multi-line-continuation
+        style). `EditableFields.Annotations []string` holds the parsed
+        texts; `Apply` reconciles them against `original.Annotations`,
+        preserving each unchanged annotation's original `Entry` timestamp
+        and leaving new/edited text with an empty `Entry` (which
+        Taskwarrior fills in on import). **No separate
+        Annotate/denotate-reconciliation plumbing was needed for this
+        path** — confirmed directly against a real `task` binary that
+        `task import` with a full `annotations` array in the JSON payload
+        (which `editTaskCallback` already sends via the existing
+        `Client.Import`/`TaskImporter`) correctly adds, edits, *and
+        removes* annotations to match whatever's provided, the same way
+        it already does for Description/Project/etc. Omitting the
+        `annotations` field entirely from the JSON (not what this code
+        does) would instead wipe existing annotations — noted here so a
+        future change to the Import payload doesn't reintroduce that
+        footgun.
+      - Tests: `internal/taskwarrior/mutations_test.go` (unit +
+        integration, the latter gated on `task` being on `PATH`),
+        `cmd/lazytask/main_test.go`
+        (`TestModelUpdate_AddingSubmitWithAnnotations`),
+        `internal/editbuffer/editbuffer_test.go` (Serialize/Parse/Apply
+        round-trip, escaping, entry-preservation, deletion-to-nil cases).
+      - Diff came in at 6 files / +348/−11 — over the ~150–250 line
+        target (flagged per §6 at the time), justified by this being
+        shared plumbing both the Add popup and edit-buffer flows need;
+        human reviewed and did not request a split.
+- [ ] **Chunk 4 — Details panel annotations + tasklist single-line safety —
+      NOT STARTED.** Clarified scope (confirmed with the human, supersedes
+      the original "multi-line rendering/wrapping" framing below):
+      - **Tasks list panel** must never display Annotations at all (it
+        already doesn't — no code path there touches `Task.Annotations`)
+        and must remain **strictly single-line per task row, always
+        truncated, never wrapped** — this includes a `Description`
+        containing embedded newlines (possible today via the `$EDITOR`
+        multi-line Description flow), which currently leaks a raw `\n`
+        into the row's rendered string and visually breaks the row across
+        multiple terminal lines. Fix: collapse/strip embedded newlines
+        (and any other control characters that'd force a line break)
+        before truncating in `internal/ui/tasklist/model.go`'s
+        `renderDataRow`/`truncate`/`renderDescriptionCell` path — no row
+        height calculation or wrapping should be introduced; truncation
+        stays exactly as-is otherwise.
+      - **Details panel** (`detailsPanelContent` in `cmd/lazytask/main.go`,
+        key `0`) is the only place Annotations should ever be shown: add
+        an `Annotations:` section there (it already renders arbitrary
+        multi-line, read-only content for the selected task, so no new
+        wrapping logic is needed there — just append the annotation text,
+        one per line, e.g. prefixed with their Entry timestamp).
+      - Depends on Chunk 3 existing so there's actually annotation data to
+        show, though the tasklist single-line-safety fix could in
+        principle be tackled standalone.
 
-Per §5, each of the remaining chunks (3, 4) still needs its own
-announce → build → stop → human-sign-off cycle. Do not start Chunk 4 before
-Chunk 3 is reviewed and signed off, and do not start Chunk 3 without
-re-confirming this plan is still accurate (re-read this note and the
-current git diff first, since it may have been superseded).
+Per §5, Chunk 4 still needs its own announce → build → stop →
+human-sign-off cycle. **Chunk 3's code is built and in the (uncommitted)
+working tree as of this handoff, but has not yet been explicitly signed off
+by the human** (see §5 step 4 — do not infer approval from silence or from
+this note alone). Before starting Chunk 4, the next agent must: (a)
+re-read this note and run `git status`/`git diff` to confirm the working
+tree still matches what's described above (nothing else landed or reverted
+it), and (b) get the human's explicit go-ahead to proceed — do not treat
+"Chunk 3 looks done in the diff" as equivalent to sign-off.
 
 ### Phase 3 — Tags (continuation)
 

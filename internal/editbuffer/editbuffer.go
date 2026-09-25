@@ -3,6 +3,8 @@
 // chunk 10). The buffer has two sections separated by a "---" divider line:
 //
 //	Description: <text, may span multiple lines>
+//	Annotations:
+//	- <annotation text, one per line>
 //	Project: <text>
 //	Tags: tag1, tag2
 //	Priority: <text>
@@ -22,11 +24,23 @@
 // display only and is never parsed back into the edited task, so any edits
 // a user makes there are silently ignored rather than treated as an error.
 //
-// Due is displayed as a plain YYYY-MM-DD date (see displayDue) rather than
-// taskwarrior's raw combined date/time format, but when saved it's
-// resolved by cmd/lazytask's resolveEditedDue, which also accepts the same
-// shorthand cords ("2d", "1w", "2b") and flexible absolute dates the add
-// form's Due Date field supports.
+// Each "- " line under "Annotations:" is one Taskwarrior annotation's
+// description; a line is dropped by leaving it blank/deleting it, and a
+// new annotation is added by adding a new "- " line. Annotations doesn't
+// support the Description field's own embedded-newline continuation
+// style (each annotation is a single logical line): any literal newline
+// already present in an annotation's text (which taskwarrior itself
+// allows, e.g. via `task <id> annotate` with embedded newlines from
+// outside lazytask) is escaped as "\n" when displayed and unescaped back
+// on save, rather than expanding into multiple buffer lines. Annotations
+// whose text is unchanged from the original keep their original Entry
+// timestamp on save (see Apply); new or edited text gets a fresh Entry
+// timestamp assigned by Taskwarrior on import (see
+// cmd/lazytask's editTaskCallback, which sends the whole task, annotations
+// included, through Client.Import — confirmed against a real `task`
+// 3.5.0 binary that a full re-import correctly adds/edits/removes
+// annotations to match whatever's in the JSON's "annotations" array,
+// rather than only ever appending).
 package editbuffer
 
 import (
@@ -42,6 +56,14 @@ import (
 // read-only reference section.
 const divider = "---"
 
+// annotationsHeader marks the start of the Annotations section: zero or
+// more subsequent "- " lines, each one annotation's (escaped) text.
+const annotationsHeader = "Annotations:"
+
+// annotationLinePrefix begins each individual annotation line under
+// annotationsHeader.
+const annotationLinePrefix = "- "
+
 // taskDueLayout is Taskwarrior's combined UTC export/import format for
 // date attributes (e.g. "20240115T140000Z"), matching cmd/lazytask's
 // taskDueLayout constant.
@@ -54,13 +76,16 @@ const taskDueLayout = "20060102T150405Z"
 const displayDueLayout = "2006-01-02"
 
 // editableKeys are the recognized field labels in the editable section, in
-// the order they're written by Serialize.
+// the order they're written by Serialize. Annotations is deliberately
+// excluded: it's a multi-line list section headed by annotationsHeader
+// rather than a single "Key: value" line, so it's parsed separately.
 var editableKeys = []string{"Description", "Project", "Tags", "Priority", "Due"}
 
 // EditableFields holds the subset of a Task's fields that are user-editable
 // via the buffer, as parsed back from edited buffer content.
 type EditableFields struct {
 	Description string
+	Annotations []string
 	Project     string
 	Priority    string
 	Due         string
@@ -73,6 +98,10 @@ func Serialize(t taskwarrior.Task) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "Description: %s\n", t.Description)
+	b.WriteString(annotationsHeader + "\n")
+	for _, a := range t.Annotations {
+		fmt.Fprintf(&b, "%s%s\n", annotationLinePrefix, escapeAnnotation(a.Description))
+	}
 	fmt.Fprintf(&b, "Project: %s\n", t.Project)
 	fmt.Fprintf(&b, "Tags: %s\n", strings.Join(t.Tags, ", "))
 	fmt.Fprintf(&b, "Priority: %s\n", t.Priority)
@@ -102,14 +131,22 @@ func Parse(content string) (EditableFields, error) {
 	var descLines []string
 	sawDescription := false
 	inDescription := false
+	inAnnotations := false
 
 	for _, line := range lines {
 		if strings.TrimSpace(line) == divider {
 			break
 		}
 
+		if strings.TrimRight(line, " \t") == annotationsHeader {
+			inDescription = false
+			inAnnotations = true
+			continue
+		}
+
 		if key, value, ok := matchKey(line); ok {
 			inDescription = key == "Description"
+			inAnnotations = false
 			switch key {
 			case "Description":
 				sawDescription = true
@@ -123,6 +160,16 @@ func Parse(content string) (EditableFields, error) {
 			case "Tags":
 				fields.Tags = parseTags(value)
 			}
+			continue
+		}
+
+		if inAnnotations {
+			if text, ok := strings.CutPrefix(line, annotationLinePrefix); ok {
+				fields.Annotations = append(fields.Annotations, unescapeAnnotation(text))
+			}
+			// Blank/stray lines within the Annotations section (besides
+			// "- " lines) are tolerated silently, matching the buffer's
+			// general leniency toward malformed input.
 			continue
 		}
 
@@ -143,7 +190,13 @@ func Parse(content string) (EditableFields, error) {
 
 // Apply returns a copy of original with its editable fields replaced by
 // fields, leaving every read-only reference field (ID, UUID, Status,
-// Entry, Modified, End, Urgency) untouched.
+// Entry, Modified, End, Urgency) untouched. Annotations is reconciled
+// specially: each of fields.Annotations that exactly matches the text of
+// one of original's not-yet-matched annotations keeps that annotation's
+// original Entry timestamp (so leaving an annotation's text untouched
+// doesn't reset when it was created); any new or edited annotation text
+// gets an empty Entry, which Taskwarrior assigns a fresh timestamp for on
+// import.
 func Apply(original taskwarrior.Task, fields EditableFields) taskwarrior.Task {
 	updated := original
 	updated.Description = fields.Description
@@ -151,7 +204,49 @@ func Apply(original taskwarrior.Task, fields EditableFields) taskwarrior.Task {
 	updated.Priority = fields.Priority
 	updated.Due = fields.Due
 	updated.Tags = fields.Tags
+	updated.Annotations = reconcileAnnotations(fields.Annotations, original.Annotations)
 	return updated
+}
+
+// reconcileAnnotations builds the Annotation slice for Apply: texts are the
+// edited buffer's annotation lines (in on-screen order), and original are
+// the task's annotations before editing. Each text is matched, at most
+// once, against an original annotation with the identical Description, to
+// carry over that annotation's Entry timestamp; unmatched (new or edited)
+// text gets an empty Entry.
+func reconcileAnnotations(texts []string, original []taskwarrior.Annotation) []taskwarrior.Annotation {
+	if len(texts) == 0 {
+		return nil
+	}
+
+	used := make([]bool, len(original))
+	result := make([]taskwarrior.Annotation, 0, len(texts))
+	for _, text := range texts {
+		entry := ""
+		for i, a := range original {
+			if !used[i] && a.Description == text {
+				used[i] = true
+				entry = a.Entry
+				break
+			}
+		}
+		result = append(result, taskwarrior.Annotation{Entry: entry, Description: text})
+	}
+	return result
+}
+
+// escapeAnnotation renders an annotation's Description for display as a
+// single buffer line, escaping any embedded literal newline as "\n" (see
+// the package doc comment for why annotations don't use Description's
+// multi-line continuation style).
+func escapeAnnotation(text string) string {
+	return strings.ReplaceAll(text, "\n", `\n`)
+}
+
+// unescapeAnnotation reverses escapeAnnotation when parsing a "- " line
+// back into an annotation's Description.
+func unescapeAnnotation(text string) string {
+	return strings.ReplaceAll(text, `\n`, "\n")
 }
 
 // matchKey checks whether line begins with one of editableKeys followed by

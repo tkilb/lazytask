@@ -104,6 +104,20 @@ func TestClient_SetProject_EmptyID(t *testing.T) {
 	assert.Contains(t, err.Error(), "must not be empty")
 }
 
+func TestClient_Annotate_EmptyID(t *testing.T) {
+	c := NewClient()
+	err := c.Annotate(context.Background(), "  ", "a note")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestClient_Annotate_EmptyText(t *testing.T) {
+	c := NewClient()
+	err := c.Annotate(context.Background(), "1", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
 func TestClient_Import_EmptyData(t *testing.T) {
 	c := NewClient()
 	err := c.Import(context.Background(), []byte("   "))
@@ -260,4 +274,18 @@ func TestClient_Mutations_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, unprojected, 1)
 	assert.Empty(t, unprojected[0].Project)
+
+	// 9. Annotate adds a new, timestamped annotation to the task; calling
+	// it again appends a second one rather than replacing the first.
+	err = client.Annotate(ctx, fmt.Sprintf("%d", prioID), "first note")
+	require.NoError(t, err)
+	err = client.Annotate(ctx, fmt.Sprintf("%d", prioID), "second note")
+	require.NoError(t, err)
+
+	annotated, err := client.Export(ctx, "status:pending")
+	require.NoError(t, err)
+	require.Len(t, annotated, 1)
+	require.Len(t, annotated[0].Annotations, 2)
+	assert.Equal(t, "first note", annotated[0].Annotations[0].Description)
+	assert.Equal(t, "second note", annotated[0].Annotations[1].Description)
 }

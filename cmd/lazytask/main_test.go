@@ -175,6 +175,20 @@ func (s *stubReRanker) SetUrgencyOffset(ctx context.Context, id string, rank flo
 	return s.err
 }
 
+// stubAnnotator is a test double for TaskAnnotator, avoiding any real
+// `task` process invocation.
+type stubAnnotator struct {
+	err   error
+	ids   []string
+	texts []string
+}
+
+func (s *stubAnnotator) Annotate(ctx context.Context, id, text string) error {
+	s.ids = append(s.ids, id)
+	s.texts = append(s.texts, text)
+	return s.err
+}
+
 // runBatch executes cmd, and if it returns a tea.BatchMsg (e.g. from
 // refreshes that now fetch tasks and projects concurrently via
 // tea.Batch), executes each of the batched sub-commands as well,
@@ -639,6 +653,51 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 // (via the Projects panel) pre-fills the form's Project field with that
 // project, so new tasks are automatically scoped to the currently-filtered
 // project unless the user edits/clears the field before submitting.
+// TestModelUpdate_AddingSubmitWithAnnotations verifies that submitting the
+// Add popup with non-empty Annotations text issues one Annotate call per
+// non-blank line, targeting the newly created task's ID, after the Add
+// call itself succeeds.
+func TestModelUpdate_AddingSubmitWithAnnotations(t *testing.T) {
+	adder := &stubAdder{}
+	annotator := &stubAnnotator{}
+	m := model{adder: adder, annotator: annotator, list: tasklist.New(nil), add: taskform.New(), adding: true}
+	m.add = m.add.Focus()
+
+	for _, r := range "Buy milk" {
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newModel.(model)
+	}
+	newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = newModel.(model)
+	assert.Equal(t, taskform.FieldAnnotations, m.add.FocusedField())
+	for _, r := range "call the store" {
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newModel.(model)
+	}
+	// <enter> while Annotations is focused inserts a newline rather than
+	// submitting the form (see taskform.Model.Update's doc comment).
+	newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	for _, r := range "  2% milk  " {
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newModel.(model)
+	}
+	newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = newModel.(model)
+	assert.Equal(t, taskform.FieldDescription, m.add.FocusedField())
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	require.NotNil(t, cmd)
+
+	msg := cmd()
+	addedMsg, ok := msg.(taskAddedMsg)
+	require.True(t, ok)
+	assert.Equal(t, 1, addedMsg.id)
+	assert.Equal(t, []string{"1", "1"}, annotator.ids)
+	assert.Equal(t, []string{"call the store", "2% milk"}, annotator.texts)
+}
+
 func TestModelUpdate_AddingAutoAssignsSelectedProjectFilter(t *testing.T) {
 	t.Run("real project filter is applied", func(t *testing.T) {
 		adder := &stubAdder{}

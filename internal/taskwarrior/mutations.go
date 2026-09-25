@@ -22,6 +22,7 @@ type TaskMutator interface {
 	SetUrgencyOffset(ctx context.Context, id string, rank float64) error
 	SetDue(ctx context.Context, id, due string) error
 	SetProject(ctx context.Context, id, project string) error
+	Annotate(ctx context.Context, id, text string) error
 }
 
 // createdTaskRE matches Taskwarrior's "Created task <id>." confirmation line.
@@ -159,6 +160,22 @@ func (c *Client) SetProject(ctx context.Context, id, project string) error {
 		return fmt.Errorf("id must not be empty")
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "project:"+project)
+	return err
+}
+
+// Annotate adds a new annotation with the given text to the task
+// identified by id (a Taskwarrior ID or UUID), via `task <id> annotate
+// <text>`. Taskwarrior stores text (including any embedded newlines) as a
+// single annotation's description; callers that want one annotation per
+// line of user input should call Annotate once per line themselves.
+func (c *Client) Annotate(ctx context.Context, id, text string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	if text == "" {
+		return fmt.Errorf("text must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "annotate", text)
 	return err
 }
 

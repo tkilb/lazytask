@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -295,6 +296,13 @@ type TaskProjectSetter interface {
 	SetProject(ctx context.Context, id, project string) error
 }
 
+// TaskAnnotator is the subset of the taskwarrior client needed to add an
+// annotation to a task, so it can be stubbed out in tests without
+// shelling out to the real `task` binary.
+type TaskAnnotator interface {
+	Annotate(ctx context.Context, id, text string) error
+}
+
 // tasksLoadedMsg carries the result of a successful task fetch.
 type tasksLoadedMsg struct {
 	tasks []taskwarrior.Task
@@ -516,6 +524,7 @@ type model struct {
 	reranker       TaskReRanker
 	duer           TaskDueSetter
 	projecter      TaskProjectSetter
+	annotator      TaskAnnotator
 	list           tasklist.Model
 	add            taskform.Model
 	adding         bool
@@ -582,6 +591,7 @@ func initialModel() model {
 		reranker:       client,
 		duer:           client,
 		projecter:      client,
+		annotator:      client,
 		list:           tasklist.New(nil).SetFocused(true),
 		add:            taskform.New(),
 		datePick:       datepick.New(),
@@ -893,15 +903,40 @@ func distinctTags(tasks []taskwarrior.Task) []string {
 }
 
 // addTask returns a tea.Cmd that creates a new task via adder, passing
-// along any extra `task add` argument fragments (e.g. "project:chores").
-func addTask(adder TaskAdder, description string, extraArgs ...string) tea.Cmd {
+// along any extra `task add` argument fragments (e.g. "project:chores"),
+// then—if annotations is non-empty—adds one Taskwarrior annotation per
+// non-empty line of it via annotator (see splitAnnotationLines). If the
+// Add itself succeeds but a subsequent Annotate call fails, the task
+// still exists (it is not rolled back); the error is surfaced so the user
+// knows the annotation(s) didn't fully land, but treated the same as any
+// other post-add failure for undo/refresh purposes.
+func addTask(adder TaskAdder, annotator TaskAnnotator, description, annotations string, extraArgs ...string) tea.Cmd {
 	return func() tea.Msg {
 		id, err := adder.Add(context.Background(), description, extraArgs...)
 		if err != nil {
 			return taskAddErrMsg{err: err}
 		}
+		for _, line := range splitAnnotationLines(annotations) {
+			if err := annotator.Annotate(context.Background(), strconv.Itoa(id), line); err != nil {
+				return taskAddErrMsg{err: fmt.Errorf("task added but annotation failed: %w", err)}
+			}
+		}
 		return taskAddedMsg{id: id}
 	}
+}
+
+// splitAnnotationLines splits a (possibly multi-line) Annotations field
+// value into individual annotation texts, one per non-blank line, with
+// leading/trailing whitespace trimmed from each. Blank lines are dropped
+// rather than becoming empty annotations.
+func splitAnnotationLines(value string) []string {
+	var lines []string
+	for _, line := range strings.Split(value, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+	return lines
 }
 
 // doneTask returns a tea.Cmd that marks the given task id as done via
@@ -1884,7 +1919,7 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.adding = false
 			m.add = m.add.Blur()
-			return m, addTask(m.adder, description, extraArgs...)
+			return m, addTask(m.adder, m.annotator, description, m.add.Annotations(), extraArgs...)
 		}
 	}
 

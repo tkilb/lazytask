@@ -40,7 +40,11 @@ func TestSerializeParseRoundTrip(t *testing.T) {
 		Entry:       "20241201T000000Z",
 		Modified:    "20241202T000000Z",
 		Tags:        []string{"errand", "urgent"},
-		Urgency:     5.4,
+		Annotations: []taskwarrior.Annotation{
+			{Entry: "20241201T010000Z", Description: "call the store"},
+			{Entry: "20241201T020000Z", Description: "2% milk"},
+		},
+		Urgency: 5.4,
 	}
 
 	buf := Serialize(task)
@@ -50,6 +54,7 @@ func TestSerializeParseRoundTrip(t *testing.T) {
 	assert.Equal(t, task.Description, fields.Description)
 	assert.Equal(t, task.Project, fields.Project)
 	assert.Equal(t, task.Priority, fields.Priority)
+	assert.Equal(t, []string{"call the store", "2% milk"}, fields.Annotations)
 	// The Due field is round-tripped through its human-friendly
 	// YYYY-MM-DD display form (see displayDue), not the raw taskwarrior
 	// timestamp, so compare against that same conversion rather than the
@@ -180,6 +185,104 @@ func TestParse_GarbageAfterDividerDoesNotError(t *testing.T) {
 	fields, err := Parse(buf)
 	require.NoError(t, err)
 	assert.Equal(t, "task", fields.Description)
+}
+
+func TestParse_AnnotationsSection(t *testing.T) {
+	buf := "Description: task\n" +
+		"Annotations:\n" +
+		"- first note\n" +
+		"- second note\n" +
+		"Project: home\n" +
+		"---\n"
+
+	fields, err := Parse(buf)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"first note", "second note"}, fields.Annotations)
+	assert.Equal(t, "home", fields.Project)
+}
+
+func TestParse_AnnotationsSectionEmpty(t *testing.T) {
+	buf := "Description: task\n" +
+		"Annotations:\n" +
+		"Project: home\n" +
+		"---\n"
+
+	fields, err := Parse(buf)
+	require.NoError(t, err)
+	assert.Nil(t, fields.Annotations)
+}
+
+func TestParse_AnnotationsEmbeddedNewlineEscaped(t *testing.T) {
+	buf := `Description: task
+Annotations:
+- line one\nline two
+---
+`
+
+	fields, err := Parse(buf)
+	require.NoError(t, err)
+	require.Len(t, fields.Annotations, 1)
+	assert.Equal(t, "line one\nline two", fields.Annotations[0])
+}
+
+func TestSerialize_AnnotationsEmbeddedNewlineEscaped(t *testing.T) {
+	task := taskwarrior.Task{
+		Description: "task",
+		Annotations: []taskwarrior.Annotation{{Description: "line one\nline two"}},
+	}
+
+	buf := Serialize(task)
+
+	assert.Contains(t, buf, `- line one\nline two`+"\n")
+}
+
+func TestApply_AnnotationsPreservesEntryForUnchangedText(t *testing.T) {
+	original := taskwarrior.Task{
+		Annotations: []taskwarrior.Annotation{
+			{Entry: "20241201T010000Z", Description: "unchanged note"},
+			{Entry: "20241201T020000Z", Description: "old text"},
+		},
+	}
+	fields := EditableFields{
+		Description: "task",
+		Annotations: []string{"unchanged note", "edited text", "brand new note"},
+	}
+
+	updated := Apply(original, fields)
+
+	require.Len(t, updated.Annotations, 3)
+	assert.Equal(t, taskwarrior.Annotation{Entry: "20241201T010000Z", Description: "unchanged note"}, updated.Annotations[0])
+	assert.Equal(t, taskwarrior.Annotation{Entry: "", Description: "edited text"}, updated.Annotations[1])
+	assert.Equal(t, taskwarrior.Annotation{Entry: "", Description: "brand new note"}, updated.Annotations[2])
+}
+
+func TestApply_AnnotationsRemovedWhenDeletedFromBuffer(t *testing.T) {
+	original := taskwarrior.Task{
+		Annotations: []taskwarrior.Annotation{
+			{Entry: "20241201T010000Z", Description: "keep me"},
+			{Entry: "20241201T020000Z", Description: "delete me"},
+		},
+	}
+	fields := EditableFields{
+		Description: "task",
+		Annotations: []string{"keep me"},
+	}
+
+	updated := Apply(original, fields)
+
+	require.Len(t, updated.Annotations, 1)
+	assert.Equal(t, "keep me", updated.Annotations[0].Description)
+}
+
+func TestApply_AnnotationsAllDeletedYieldsNil(t *testing.T) {
+	original := taskwarrior.Task{
+		Annotations: []taskwarrior.Annotation{{Description: "gone"}},
+	}
+	fields := EditableFields{Description: "task"}
+
+	updated := Apply(original, fields)
+
+	assert.Nil(t, updated.Annotations)
 }
 
 func TestApply_PreservesReadOnlyFields(t *testing.T) {
