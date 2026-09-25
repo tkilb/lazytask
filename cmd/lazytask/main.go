@@ -2537,6 +2537,11 @@ func (m model) renderGrid() string {
 }
 
 func main() {
+	if isVersionArg(os.Args[1:]) {
+		fmt.Println(versionString())
+		return
+	}
+
 	// Use the alternate screen so the program owns the full terminal
 	// buffer. Without it, resuming after an external process (e.g. the
 	// editor launched by the 'e' key, via tea.ExecProcess) just repaints
