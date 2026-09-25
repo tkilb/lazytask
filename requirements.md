@@ -110,15 +110,73 @@ than a human would spend minutes:
 
 ### Phase 2b — Anotations
 
-- [ ] Switch the edit popup to have a separate field for annotations, restore 'description' to be a single line field
-- Annotations needs to support multi line, for this one field <enter> will line break instead of submit
-- Edit buffer now needs to account for anotations
-- [ ] **Task panel must account for multi-line line breaks** — task
+**Progress note for the next agent (uncommitted working tree as of this
+handoff — the human reviews/commits by hand per §5, so `git status`/`git
+diff` reflect exactly what's landed so far but not yet committed):**
+
+- [x] **Chunk 1 (data model)** — `taskwarrior.Task` now has an
+      `Annotations []Annotation` field (`Annotation{Entry, Description}`,
+      matching taskwarrior's export JSON shape). See
+      `internal/taskwarrior/task.go` / `task_test.go`. Note: the phrase
+      "edit popup" in this doc turned out to mean the **Add Task popup**
+      (`internal/ui/taskform`), not the `e`-key `$EDITOR` buffer flow —
+      confirmed with the human; both still need follow-up, see below.
+- [x] **Chunk 2 (Add popup fields)** — `internal/ui/taskform`: Description
+      is a single-line `textinput` again; a new multi-line `Annotations`
+      textarea field was added right after it (own field, own tab stop).
+      While Annotations is focused, `<enter>` inserts a newline (bubbles'
+      textarea default) instead of submitting the form —
+      `cmd/lazytask/main.go`'s `updateAdding` special-cases
+      `FocusedField() == taskform.FieldAnnotations` to skip the submit
+      branch. Tests: `internal/ui/taskform/model_test.go`.
+      **Known gap:** the typed Annotations text is NOT yet persisted —
+      `updateAdding`'s submit path still only reads
+      Description/Project/Priority/Due. Do not consider the Add popup
+      "done" until this is wired (see Chunk 3 below).
+- [ ] **Chunk 3 (persistence + $EDITOR edit-buffer) — NOT STARTED.** Needed:
+      - A new mutation, e.g. `TaskAnnotator`/`Client.Annotate(ctx, id,
+        text)` in `internal/taskwarrior/mutations.go` + a matching narrow
+        interface in `cmd/lazytask/main.go` (same pattern as
+        `TaskDueSetter`/`TaskProjectSetter` etc.), likely shelling out to
+        `task <id> annotate <text>` (check whether multi-line text needs
+        special quoting/handling through the `task` CLI — verify with a
+        real `task` binary).
+      - Wire it into the **Add popup's** submit path (`updateAdding` in
+        `cmd/lazytask/main.go`): after `addTask` succeeds and returns the
+        new task's ID, if `m.add.Annotations()` is non-empty, issue the
+        Annotate call (likely split multi-line input into one taskwarrior
+        annotation per line, or one annotation with embedded newlines —
+        needs a decision/check against how `task annotate` handles `\n`).
+      - Wire it into the **`$EDITOR` edit-buffer flow**
+        (`internal/editbuffer` + `e`-key handling in
+        `cmd/lazytask/main.go`'s `editTask`/`editTaskCallback`): extend
+        `editbuffer.Serialize`/`Parse`/`Apply`/`EditableFields` to add an
+        `Annotations:` section (plural, since a task may have many,
+        each with its own Entry timestamp — decide the buffer's textual
+        format, e.g. one `- <text>` line per annotation, before
+        implementing) so editing an existing task's annotations round-trips
+        through the external editor. This will likely need
+        `Client.Annotate`/a denotate-equivalent to reconcile
+        added/removed/edited annotations against taskwarrior, since
+        `task import` alone may not touch annotations the way it does
+        Description/Project/etc. — **verify against a real `task` binary
+        before assuming import semantics.**
+      - This is intentionally one chunk (not split further) because the
+        Annotate mutation is shared plumbing both the Add popup and the
+        edit-buffer flow need — build it once.
+- [ ] **Chunk 4 — Task panel multi-line rendering — NOT STARTED.**
+      **Task panel must account for multi-line line breaks** — task
       descriptions/annotations containing embedded newlines currently break
       the tasks panel's row rendering; needs correct height
-      calculation/wrapping.
+      calculation/wrapping. Depends on Chunk 3 existing so there's actually
+      annotation data to render, though the description-newline part of
+      this could in principle be tackled standalone.
 
-- [ ] Switch the edit popup to have a separate field for annotations
+Per §5, each of the remaining chunks (3, 4) still needs its own
+announce → build → stop → human-sign-off cycle. Do not start Chunk 4 before
+Chunk 3 is reviewed and signed off, and do not start Chunk 3 without
+re-confirming this plan is still accurate (re-read this note and the
+current git diff first, since it may have been superseded).
 
 ### Phase 3 — Tags (continuation)
 

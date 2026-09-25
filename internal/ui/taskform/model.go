@@ -26,6 +26,7 @@ type Field int
 
 const (
 	FieldDescription Field = iota
+	FieldAnnotations
 	FieldProject
 	FieldPriority
 	FieldDueDate
@@ -36,6 +37,7 @@ const (
 // fieldTitles are the border titles for each field's box, in Field order.
 var fieldTitles = [fieldCount]string{
 	FieldDescription: "Description",
+	FieldAnnotations: "Annotations",
 	FieldProject:     "Project",
 	FieldPriority:    "Priority",
 	FieldDueDate:     "Due Date",
@@ -57,10 +59,11 @@ var (
 // minPanelWidth is used when no tea.WindowSizeMsg has been received yet.
 const minPanelWidth = 80
 
-// descriptionRows is the number of visible rows in the Description field's
-// textarea: long descriptions wrap and scroll within this fixed-height
-// viewport rather than growing the box.
-const descriptionRows = 2
+// annotationsRows is the number of visible rows in the Annotations field's
+// textarea: unlike Description (a single-line field), Annotations supports
+// embedded newlines (<enter> inserts a line break rather than submitting
+// the form), so it gets a taller, scrollable viewport.
+const annotationsRows = 3
 
 // hintText is embedded as a footer in the last (Due Date) field's box,
 // lazygit-style, so the key-binding hint doesn't need its own row.
@@ -73,7 +76,8 @@ const previewLayout = "Mon Jan 2 2006"
 // Model is a Bubble Tea model rendering the Add Task form as a stack of
 // individually bordered field boxes.
 type Model struct {
-	description textarea.Model
+	description textinput.Model
+	annotations textarea.Model
 	project     textinput.Model
 	priority    textinput.Model
 	due         textinput.Model
@@ -90,20 +94,26 @@ type Model struct {
 func New() Model {
 	m := Model{now: time.Now}
 
+	descriptionInput := textinput.New()
+	descriptionInput.Prompt = ""
+	descriptionInput.Placeholder = "Task description..."
+	descriptionInput.CharLimit = 256
+	m.description = descriptionInput
+
 	ta := textarea.New()
 	ta.Prompt = ""
 	ta.ShowLineNumbers = false
-	ta.Placeholder = "Task description..."
-	ta.CharLimit = 256
-	ta.SetHeight(descriptionRows)
+	ta.Placeholder = "Add a note (optional)... <enter> for a new line"
+	ta.CharLimit = 2000
+	ta.SetHeight(annotationsRows)
 	ta.FocusedStyle.CursorLine = flatStyle
 	ta.FocusedStyle.CursorLineNumber = flatStyle
-	m.description = ta
+	m.annotations = ta
 	// Give the textarea a real width up front (matching the minPanelWidth
 	// fallback View() uses before any tea.WindowSizeMsg arrives), so its
 	// internal cursor-follow scrolling works correctly even if View() is
 	// called before the first Update (see the comment in Update).
-	m.description.SetWidth(m.descriptionInnerWidth())
+	m.annotations.SetWidth(m.annotationsInnerWidth())
 
 	projectInput := textinput.New()
 	projectInput.Prompt = ""
@@ -139,6 +149,8 @@ func (m Model) WithNow(now func() time.Time) Model {
 func (m Model) Focus() Model {
 	m.description.Reset()
 	m.description.Blur()
+	m.annotations.Reset()
+	m.annotations.Blur()
 	m.project.Reset()
 	m.project.Blur()
 	m.priority.Reset()
@@ -154,6 +166,7 @@ func (m Model) Focus() Model {
 // Reset clears every field's text without changing focus state.
 func (m Model) Reset() Model {
 	m.description.Reset()
+	m.annotations.Reset()
 	m.project.Reset()
 	m.priority.Reset()
 	m.due.Reset()
@@ -163,6 +176,7 @@ func (m Model) Reset() Model {
 // Blur removes keyboard focus from every field.
 func (m Model) Blur() Model {
 	m.description.Blur()
+	m.annotations.Blur()
 	m.project.Blur()
 	m.priority.Blur()
 	m.due.Blur()
@@ -174,6 +188,8 @@ func (m Model) Focused() bool {
 	switch m.focused {
 	case FieldDescription:
 		return m.description.Focused()
+	case FieldAnnotations:
+		return m.annotations.Focused()
 	case FieldProject:
 		return m.project.Focused()
 	case FieldPriority:
@@ -200,6 +216,12 @@ func (m Model) SetProject(v string) Model {
 // Description returns the current (untrimmed) Description field text.
 func (m Model) Description() string {
 	return m.description.Value()
+}
+
+// Annotations returns the current (untrimmed) Annotations field text,
+// which may span multiple lines.
+func (m Model) Annotations() string {
+	return m.annotations.Value()
 }
 
 // Project returns the current (untrimmed) Project field text.
@@ -247,6 +269,7 @@ func (f Field) prev() Field { return (f - 1 + fieldCount) % fieldCount }
 // previously had it.
 func (m Model) focusField(f Field) Model {
 	m.description.Blur()
+	m.annotations.Blur()
 	m.project.Blur()
 	m.priority.Blur()
 	m.due.Blur()
@@ -255,6 +278,8 @@ func (m Model) focusField(f Field) Model {
 	switch f {
 	case FieldDescription:
 		m.description.Focus()
+	case FieldAnnotations:
+		m.annotations.Focus()
 	case FieldProject:
 		m.project.Focus()
 	case FieldPriority:
@@ -271,12 +296,16 @@ func (m Model) Init() tea.Cmd {
 }
 
 // Update implements tea.Model. Tab/shift+tab cycle focus between fields
-// (deliberately not up/down, since the Description field is a real
+// (deliberately not up/down, since the Annotations field is a real
 // multi-line textarea that needs up/down for its own cursor movement);
 // every other message (including plain text entry) is forwarded to the
 // currently focused field. It does not interpret enter/esc itself, since
 // those keys are also meaningful to the host model (submit/cancel), which
-// retains full control over the current mode/focus.
+// retains full control over the current mode/focus. The one exception is
+// while Annotations is focused: bubbles' textarea already treats <enter>
+// as "insert a newline" rather than a submit signal, so the host special-
+// cases FocusedField() == FieldAnnotations to let that newline-insertion
+// reach the textarea instead of intercepting <enter> as "submit form".
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -292,18 +321,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 	}
 
-	// The Description textarea's own cursor-follow scrolling (used once
+	// The Annotations textarea's own cursor-follow scrolling (used once
 	// content wraps past the visible height) relies on its internal width
 	// matching what View() actually renders at. View() only ever sets the
 	// width on a throwaway render-time copy, so it must be kept in sync
 	// here too, or the textarea scrolls itself using a stale (zero) width
 	// and ends up showing blank lines instead of the wrapped content.
-	m.description.SetWidth(m.descriptionInnerWidth())
+	m.annotations.SetWidth(m.annotationsInnerWidth())
 
 	var cmd tea.Cmd
 	switch m.focused {
 	case FieldDescription:
 		m.description, cmd = m.description.Update(msg)
+	case FieldAnnotations:
+		m.annotations, cmd = m.annotations.Update(msg)
 	case FieldProject:
 		m.project, cmd = m.project.Update(msg)
 	case FieldPriority:
@@ -322,7 +353,8 @@ func (m Model) View() string {
 	}
 
 	boxes := []string{
-		m.descriptionBox(width),
+		m.simpleFieldBox(FieldDescription, m.description.View(), width),
+		m.annotationsBox(width),
 		m.simpleFieldBox(FieldProject, m.project.View(), width),
 		m.simpleFieldBox(FieldPriority, m.priority.View(), width),
 		m.dueDateBox(width),
@@ -330,29 +362,29 @@ func (m Model) View() string {
 	return strings.Join(boxes, "\n")
 }
 
-// descriptionInnerWidth returns the Description textarea's current inner
-// (content) width, mirroring the outer-to-inner sizing descriptionBox uses
+// annotationsInnerWidth returns the Annotations textarea's current inner
+// (content) width, mirroring the outer-to-inner sizing annotationsBox uses
 // for rendering, so Update can keep the textarea's own width in sync (see
 // the comment in Update for why this matters).
-func (m Model) descriptionInnerWidth() int {
+func (m Model) annotationsInnerWidth() int {
 	width := m.width
 	if width <= 0 {
 		width = minPanelWidth
 	}
-	innerWidth, _ := panel.InnerSize(width, descriptionRows+2)
+	innerWidth, _ := panel.InnerSize(width, annotationsRows+2)
 	return innerWidth
 }
 
-// descriptionBox renders the Description field as its own lazygit-style
-// bordered panel.Frame box, descriptionRows tall, so long descriptions
+// annotationsBox renders the Annotations field as its own lazygit-style
+// bordered panel.Frame box, annotationsRows tall, so multi-line notes
 // wrap/scroll within a fixed-height viewport rather than growing the box.
-func (m Model) descriptionBox(outerWidth int) string {
-	innerWidth, innerHeight := panel.InnerSize(outerWidth, descriptionRows+2)
-	return panel.Frame(fieldTitles[FieldDescription], m.description.View(), innerWidth, innerHeight, m.focused == FieldDescription, "")
+func (m Model) annotationsBox(outerWidth int) string {
+	innerWidth, innerHeight := panel.InnerSize(outerWidth, annotationsRows+2)
+	return panel.Frame(fieldTitles[FieldAnnotations], m.annotations.View(), innerWidth, innerHeight, m.focused == FieldAnnotations, "")
 }
 
-// simpleFieldBox renders a single-line textinput-backed field (Project,
-// Priority) as its own lazygit-style bordered panel.Frame box.
+// simpleFieldBox renders a single-line textinput-backed field (Description,
+// Project, Priority) as its own lazygit-style bordered panel.Frame box.
 func (m Model) simpleFieldBox(f Field, body string, outerWidth int) string {
 	innerWidth, innerHeight := panel.InnerSize(outerWidth, 1+2)
 	return panel.Frame(fieldTitles[f], body, innerWidth, innerHeight, f == m.focused, "")

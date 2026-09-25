@@ -34,6 +34,9 @@ func TestModel_TabCyclesFields(t *testing.T) {
 	m := New().Focus()
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, FieldAnnotations, m.FocusedField())
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	assert.Equal(t, FieldProject, m.FocusedField())
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -51,16 +54,41 @@ func TestModel_TabCyclesFields(t *testing.T) {
 	assert.Equal(t, FieldDueDate, m.FocusedField())
 }
 
+func TestModel_AnnotationsTyping(t *testing.T) {
+	m := New().Focus()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, FieldAnnotations, m.FocusedField())
+
+	m = typeString(t, m, "first note")
+	assert.Equal(t, "first note", m.Annotations())
+}
+
+func TestModel_AnnotationsEnterInsertsNewline(t *testing.T) {
+	m := New().Focus()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = typeString(t, m, "line one")
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = typeString(t, m, "line two")
+
+	// <enter> inserted a newline within the Annotations field rather than
+	// being swallowed/ignored, and focus stayed on Annotations (the host
+	// model is the one that special-cases <enter> as "submit", never
+	// taskform itself).
+	assert.Equal(t, "line one\nline two", m.Annotations())
+	assert.Equal(t, FieldAnnotations, m.FocusedField())
+}
+
 func TestModel_TabTypingGoesToFocusedField(t *testing.T) {
 	m := New().Focus()
 	m = typeString(t, m, "Buy milk")
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
 	m = typeString(t, m, "chores")
 	assert.Equal(t, "chores", m.Project())
 	assert.Equal(t, "Buy milk", m.Description())
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
 	m = typeString(t, m, "h")
 	priority, ok := m.Priority()
 	assert.True(t, ok)
@@ -88,8 +116,9 @@ func TestModel_Priority(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := New().Focus()
-			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
 			m = typeString(t, m, tt.input)
 
 			got, ok := m.Priority()
@@ -103,9 +132,10 @@ func TestModel_ResolveDue(t *testing.T) {
 	fixedNow := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
 	m := New().WithNow(func() time.Time { return fixedNow }).Focus()
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Due Date
 	m = typeString(t, m, "2d")
 
 	assert.Equal(t, "2d", m.DueInput())
@@ -116,9 +146,10 @@ func TestModel_ResolveDue(t *testing.T) {
 
 func TestModel_ResolveDue_Invalid(t *testing.T) {
 	m := New().Focus()
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Due Date
 	m = typeString(t, m, "not-a-date")
 
 	_, ok := m.ResolveDue()
@@ -128,7 +159,8 @@ func TestModel_ResolveDue_Invalid(t *testing.T) {
 func TestModel_FocusResetsPriorFields(t *testing.T) {
 	m := New().Focus()
 	m = typeString(t, m, "Buy milk")
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
 	m = typeString(t, m, "chores")
 
 	m = m.Focus()
@@ -140,7 +172,8 @@ func TestModel_FocusResetsPriorFields(t *testing.T) {
 func TestModel_Reset(t *testing.T) {
 	m := New().Focus()
 	m = typeString(t, m, "Buy milk")
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
 	m = typeString(t, m, "chores")
 
 	m = m.Reset()
@@ -154,11 +187,12 @@ func TestModel_View(t *testing.T) {
 	m := New().Focus()
 	view := m.View()
 	assert.Contains(t, view, "Description")
+	assert.Contains(t, view, "Annotations")
 	assert.Contains(t, view, "Project")
 	assert.Contains(t, view, "Priority")
 	assert.Contains(t, view, "Due Date")
 	// Each field is its own bordered box (lazygit-style), so there must be
 	// more than one top/bottom border pair.
-	assert.GreaterOrEqual(t, strings.Count(view, "╭"), 4)
-	assert.GreaterOrEqual(t, strings.Count(view, "╰"), 4)
+	assert.GreaterOrEqual(t, strings.Count(view, "╭"), 5)
+	assert.GreaterOrEqual(t, strings.Count(view, "╰"), 5)
 }

@@ -1847,6 +1847,13 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.add = m.add.Blur()
 			return m, nil
 		case "enter":
+			// While the Annotations field has focus, <enter> means "insert
+			// a newline" (bubbles' textarea's own default binding), not
+			// "submit the form" — fall through to the generic forwarding
+			// below instead of treating it as submit.
+			if m.add.FocusedField() == taskform.FieldAnnotations {
+				break
+			}
 			description := strings.TrimSpace(m.add.Description())
 			if description == "" {
 				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Description cannot be empty."})
