@@ -110,11 +110,11 @@ than a human would spend minutes:
 
 ### Phase 2 — Bug Fixes
 
-- [ ] **Undo failing to undo edits** — undo does not correctly revert edits
+- [x] **Undo failing to undo edits** — undo does not correctly revert edits
       made to a task.
-- [ ] **Edit: `m` → `M` for priority** — fix the edit-form logic so
+- [ ] **Editor: `m` → `M` for priority** — fix the edit-form logic so
       lowercase `m` is normalized/mapped to the `M` (medium) priority value
-      taskwarrior expects.
+      taskwarrior expects. This should account for med -> M, high->H, HIGH->H as well as low -> L etc
 - [ ] **Resolve shorthand dates in edit, same as add popup** — the edit flow
       should reuse the existing `internal/dateparse` shorthand resolution
       (e.g. `2d`, `1w`, `2b`) that the add popup already supports, instead of

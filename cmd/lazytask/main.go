@@ -471,8 +471,12 @@ type redoErrMsg struct {
 	err error
 }
 
-// taskEditedMsg carries the result of a successful edit-and-reimport.
-type taskEditedMsg struct{}
+// taskEditedMsg carries the result of a successful edit-and-reimport, plus
+// the undo.Action that reverses it by re-importing the pre-edit snapshot
+// (see editTaskCallback).
+type taskEditedMsg struct {
+	action undo.Action
+}
 
 // taskEditErrMsg carries the error from a failed edit-and-reimport, whether
 // from the editor invocation itself, parsing its output, or re-importing.
@@ -1195,14 +1199,22 @@ func editTaskCallback(importer TaskImporter, session *editor.Session, original t
 		}
 		updated := editbuffer.Apply(original, fields)
 
-		data, err := json.Marshal(updated)
+		originalSnapshot, err := json.Marshal(original)
 		if err != nil {
 			return taskEditErrMsg{err: err}
 		}
-		if err := importer.Import(context.Background(), data); err != nil {
+		updatedSnapshot, err := json.Marshal(updated)
+		if err != nil {
 			return taskEditErrMsg{err: err}
 		}
-		return taskEditedMsg{}
+		if err := importer.Import(context.Background(), updatedSnapshot); err != nil {
+			return taskEditErrMsg{err: err}
+		}
+		return taskEditedMsg{action: undo.Action{
+			Description: fmt.Sprintf("edit task %s", taskID(original)),
+			Undo:        func() error { return importer.Import(context.Background(), originalSnapshot) },
+			Redo:        func() error { return importer.Import(context.Background(), updatedSnapshot) },
+		}}
 	}
 }
 
@@ -1645,6 +1657,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:
+		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case taskEditErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))

@@ -21,6 +21,7 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/tags"
 	"github.com/tkilb/lazytask/internal/ui/taskform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
+	"github.com/tkilb/lazytask/internal/undo"
 )
 
 // stubReader is a test double for TaskReader, avoiding any real `task`
@@ -1344,10 +1345,11 @@ func TestModelUpdate_TaskEditedMsgTriggersRefresh(t *testing.T) {
 	reader := &stubReader{tasks: []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}}
 	m := model{reader: reader, list: tasklist.New(nil)}
 
-	newModel, cmd := m.Update(taskEditedMsg{})
+	newModel, cmd := m.Update(taskEditedMsg{action: undo.Action{Description: "edit task 1"}})
 	m = newModel.(model)
 	assert.False(t, m.popups.Active())
 	require.NotNil(t, cmd)
+	assert.True(t, m.undo.CanUndo())
 
 	loaded, ok := findTasksLoaded(runBatch(cmd))
 	assert.True(t, ok)
@@ -1923,7 +1925,7 @@ func TestEditTaskCallback_ImportsEditedTask(t *testing.T) {
 	importer := &stubImporter{}
 	msg := editTaskCallback(importer, session, original)(nil)
 
-	_, ok := msg.(taskEditedMsg)
+	edited, ok := msg.(taskEditedMsg)
 	assert.True(t, ok)
 	require.Len(t, importer.calls, 1)
 
@@ -1931,6 +1933,22 @@ func TestEditTaskCallback_ImportsEditedTask(t *testing.T) {
 	require.NoError(t, json.Unmarshal(importer.calls[0], &got))
 	assert.Equal(t, "abc-123", got.UUID)
 	assert.Equal(t, "Buy milk and eggs", got.Description)
+
+	// The undo.Action must reverse the edit by re-importing the pre-edit
+	// snapshot, and redo must re-apply the edited version.
+	require.NotNil(t, edited.action.Undo)
+	require.NoError(t, edited.action.Undo())
+	require.Len(t, importer.calls, 2)
+	var undone taskwarrior.Task
+	require.NoError(t, json.Unmarshal(importer.calls[1], &undone))
+	assert.Equal(t, "Buy milk", undone.Description)
+
+	require.NotNil(t, edited.action.Redo)
+	require.NoError(t, edited.action.Redo())
+	require.Len(t, importer.calls, 3)
+	var redone taskwarrior.Task
+	require.NoError(t, json.Unmarshal(importer.calls[2], &redone))
+	assert.Equal(t, "Buy milk and eggs", redone.Description)
 }
 
 func TestEditTaskCallback_EditorErrorSkipsImport(t *testing.T) {
