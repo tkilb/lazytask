@@ -385,6 +385,26 @@ func TestRenderDataRow_NoQueryLeavesDescriptionUnstyled(t *testing.T) {
 	assert.NotContains(t, row, "\x1b[")
 }
 
+func TestRenderDataRow_CollapsesEmbeddedNewlinesInDescription(t *testing.T) {
+	// A Description containing embedded newlines is possible today via
+	// the $EDITOR multi-line Description flow; the tasklist row must stay
+	// strictly single-line, never wrapped, so those newlines must be
+	// collapsed away rather than leaking a raw "\n" into the rendered row.
+	task := taskwarrior.Task{ID: 1, Description: "Buy groceries\nand also milk", Project: "Home"}
+
+	row := renderDataRow(80, task, false, "")
+
+	assert.NotContains(t, row, "\n")
+	assert.Contains(t, row, "Buy groceries and also milk")
+}
+
+func TestSanitizeSingleLine_CollapsesNewlinesAndControlChars(t *testing.T) {
+	got := sanitizeSingleLine("line one\nline two\r\nline three\x07end")
+	assert.Equal(t, "line one line two  line three end", got)
+	assert.NotContains(t, got, "\n")
+	assert.NotContains(t, got, "\r")
+}
+
 func TestSetTasks_SortsByUrgencyDescending(t *testing.T) {
 	tasks := []taskwarrior.Task{
 		{ID: 1, Description: "low urgency", Urgency: 1.2},

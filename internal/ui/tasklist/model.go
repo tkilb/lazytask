@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -466,7 +467,7 @@ func renderDataRow(width int, t taskwarrior.Task, selected bool, query string) s
 // rest styled as base (so selected-row bold/background still applies to
 // the whole cell).
 func renderDescriptionCell(desc string, w int, query string, base lipgloss.Style, selected bool) string {
-	truncated := truncate(desc, w)
+	truncated := truncate(sanitizeSingleLine(desc), w)
 	pad := w - len(truncated)
 	if pad < 0 {
 		pad = 0
@@ -517,6 +518,21 @@ func renderWithMatches(s, query string, base lipgloss.Style, selected bool) stri
 		i = matchEnd
 	}
 	return b.String()
+}
+
+// sanitizeSingleLine collapses a Description that contains embedded
+// newlines (possible today via the $EDITOR multi-line Description flow)
+// or other line-breaking control characters into a single line, so a
+// tasklist row can never be visually broken across multiple terminal
+// lines. Each run of newlines/control characters is replaced with a
+// single space; truncation happens separately afterward.
+func sanitizeSingleLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || (unicode.IsControl(r) && r != '\t') {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // truncate shortens s to fit within width, adding an ellipsis if it was cut.

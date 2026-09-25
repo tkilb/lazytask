@@ -3,8 +3,9 @@
 // chunk 10). The buffer has two sections separated by a "---" divider line:
 //
 //	Description: <text, may span multiple lines>
-//	Annotations:
-//	- <annotation text, one per line>
+//	Annotations: <first annotation's text, inline like every other field>
+//	  <second annotation's text, indented on its own line>
+//	  <third annotation's text, indented on its own line>
 //	Project: <text>
 //	Tags: tag1, tag2
 //	Priority: <text>
@@ -24,21 +25,24 @@
 // display only and is never parsed back into the edited task, so any edits
 // a user makes there are silently ignored rather than treated as an error.
 //
-// Each "- " line under "Annotations:" is one Taskwarrior annotation's
-// description; a line is dropped by leaving it blank/deleting it, and a
-// new annotation is added by adding a new "- " line. Annotations doesn't
-// support the Description field's own embedded-newline continuation
-// style (each annotation is a single logical line): any literal newline
-// already present in an annotation's text (which taskwarrior itself
-// allows, e.g. via `task <id> annotate` with embedded newlines from
-// outside lazytask) is escaped as "\n" when displayed and unescaped back
-// on save, rather than expanding into multiple buffer lines. Annotations
-// whose text is unchanged from the original keep their original Entry
-// timestamp on save (see Apply); new or edited text gets a fresh Entry
-// timestamp assigned by Taskwarrior on import (see
-// cmd/lazytask's editTaskCallback, which sends the whole task, annotations
-// included, through Client.Import — confirmed against a real `task`
-// 3.5.0 binary that a full re-import correctly adds/edits/removes
+// Annotations reads like every other "Key: value" field (the first
+// annotation's text goes directly after the colon on the header line
+// itself) for a single annotation; a second and any further annotation
+// each get their own line, indented purely for readability — the leading
+// whitespace on those continuation lines is never itself part of the
+// saved text (see Parse). A line is dropped by leaving it blank/deleting
+// it, and a new annotation is added by adding a new indented line. Each
+// annotation is still a single logical line (Annotations doesn't support
+// Description's own embedded-newline continuation style): any literal
+// newline already present in an annotation's text (which taskwarrior
+// itself allows, e.g. via `task <id> annotate` with embedded newlines
+// from outside lazytask) is escaped as "\n" when displayed and unescaped
+// back on save. Annotations whose text is unchanged from the original
+// keep their original Entry timestamp on save (see Apply); new or edited
+// text gets a fresh Entry timestamp assigned by Taskwarrior on import
+// (see cmd/lazytask's editTaskCallback, which sends the whole task,
+// annotations included, through Client.Import — confirmed against a real
+// `task` 3.5.0 binary that a full re-import correctly adds/edits/removes
 // annotations to match whatever's in the JSON's "annotations" array,
 // rather than only ever appending).
 package editbuffer
@@ -56,13 +60,17 @@ import (
 // read-only reference section.
 const divider = "---"
 
-// annotationsHeader marks the start of the Annotations section: zero or
-// more subsequent "- " lines, each one annotation's (escaped) text.
+// annotationsHeader marks the start of the Annotations section: the first
+// annotation's (escaped) text, if any, goes directly on this same line
+// after the colon; any further annotations each get their own indented
+// continuation line (see annotationContinuationIndent).
 const annotationsHeader = "Annotations:"
 
-// annotationLinePrefix begins each individual annotation line under
-// annotationsHeader.
-const annotationLinePrefix = "- "
+// annotationContinuationIndent is prepended to every annotation after the
+// first purely for readability in the buffer; Parse strips it (and any
+// other leading whitespace) rather than treating it as part of the saved
+// text.
+const annotationContinuationIndent = "  "
 
 // taskDueLayout is Taskwarrior's combined UTC export/import format for
 // date attributes (e.g. "20240115T140000Z"), matching cmd/lazytask's
@@ -98,9 +106,13 @@ func Serialize(t taskwarrior.Task) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "Description: %s\n", t.Description)
-	b.WriteString(annotationsHeader + "\n")
-	for _, a := range t.Annotations {
-		fmt.Fprintf(&b, "%s%s\n", annotationLinePrefix, escapeAnnotation(a.Description))
+	if len(t.Annotations) == 0 {
+		b.WriteString(annotationsHeader + "\n")
+	} else {
+		fmt.Fprintf(&b, "%s %s\n", annotationsHeader, escapeAnnotation(t.Annotations[0].Description))
+		for _, a := range t.Annotations[1:] {
+			fmt.Fprintf(&b, "%s%s\n", annotationContinuationIndent, escapeAnnotation(a.Description))
+		}
 	}
 	fmt.Fprintf(&b, "Project: %s\n", t.Project)
 	fmt.Fprintf(&b, "Tags: %s\n", strings.Join(t.Tags, ", "))
@@ -138,9 +150,18 @@ func Parse(content string) (EditableFields, error) {
 			break
 		}
 
-		if strings.TrimRight(line, " \t") == annotationsHeader {
+		if trimmed := strings.TrimRight(line, " \t"); strings.HasPrefix(trimmed, annotationsHeader) {
 			inDescription = false
 			inAnnotations = true
+			// The first annotation, if any, is inline after the colon
+			// (matching how every other field reads); indenting text
+			// after "Annotations:" the way a user might naturally try
+			// with any other field must not corrupt the Description the
+			// way it used to (see git history) — it's captured as the
+			// first annotation's text instead.
+			if text := strings.TrimSpace(strings.TrimPrefix(trimmed, annotationsHeader)); text != "" {
+				fields.Annotations = append(fields.Annotations, unescapeAnnotation(text))
+			}
 			continue
 		}
 
@@ -164,12 +185,15 @@ func Parse(content string) (EditableFields, error) {
 		}
 
 		if inAnnotations {
-			if text, ok := strings.CutPrefix(line, annotationLinePrefix); ok {
+			// Every second-and-later annotation is its own line, indented
+			// purely for readability (see annotationContinuationIndent);
+			// the leading whitespace itself is never part of the saved
+			// text, so it's stripped here rather than preserved. A blank
+			// line (nothing left after stripping) is dropped rather than
+			// becoming a phantom empty-string annotation.
+			if text := strings.TrimSpace(line); text != "" {
 				fields.Annotations = append(fields.Annotations, unescapeAnnotation(text))
 			}
-			// Blank/stray lines within the Annotations section (besides
-			// "- " lines) are tolerated silently, matching the buffer's
-			// general leniency toward malformed input.
 			continue
 		}
 

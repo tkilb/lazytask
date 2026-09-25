@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -557,11 +558,11 @@ func TestDetailsPanelContent(t *testing.T) {
 		assert.Contains(t, content, "Project:     home")
 		assert.Contains(t, content, "Tags:        urgent,chores")
 		assert.Contains(t, content, "Priority:    H")
-		assert.Contains(t, content, "Due:         20260101T000000Z")
+		assert.Contains(t, content, "Due:         2026-01-01")
 		assert.Contains(t, content, "Urgency:     5.50")
 		assert.Contains(t, content, "Urg.Offset:  2.2500")
-		assert.Contains(t, content, "Entry:       20250101T000000Z")
-		assert.Contains(t, content, "Modified:    20250102T000000Z")
+		assert.Contains(t, content, "Entry:       2025-01-01")
+		assert.Contains(t, content, "Modified:    2025-01-02")
 		assert.NotContains(t, content, "End:")
 	})
 
@@ -580,7 +581,60 @@ func TestDetailsPanelContent(t *testing.T) {
 		m := model{list: tasklist.New([]taskwarrior.Task{
 			{ID: 9, Status: "completed", Description: "Done task", End: "20250103T000000Z"},
 		})}
-		assert.Contains(t, m.detailsPanelContent(), "End:         20250103T000000Z")
+		assert.Contains(t, m.detailsPanelContent(), "End:         2025-01-03")
+	})
+
+	t.Run("shows Annotations section when task has annotations", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{
+				ID:          11,
+				Status:      "pending",
+				Description: "Mow lawn",
+				Annotations: []taskwarrior.Annotation{
+					{Entry: "20250101T000000Z", Description: "called the vendor"},
+					{Entry: "20250102T000000Z", Description: "waiting on parts"},
+				},
+			},
+		})}
+		content := m.detailsPanelContent()
+		assert.Contains(t, content, "Annotations:")
+		assert.Contains(t, content, "called the vendor")
+		assert.Contains(t, content, "waiting on parts")
+		assert.NotContains(t, content, "20250101T000000Z")
+		assert.NotContains(t, content, "20250102T000000Z")
+	})
+
+	t.Run("omits Annotations section when task has none", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{ID: 12, Status: "pending", Description: "No annotations here"},
+		})}
+		assert.NotContains(t, m.detailsPanelContent(), "Annotations:")
+	})
+
+	t.Run("indents continuation lines of a multi-line annotation", func(t *testing.T) {
+		m := model{list: tasklist.New([]taskwarrior.Task{
+			{
+				ID:          13,
+				Status:      "pending",
+				Description: "Mow lawn",
+				Annotations: []taskwarrior.Annotation{
+					{Entry: "20250101T000000Z", Description: "line one\nline two"},
+				},
+			},
+		})}
+		content := m.detailsPanelContent()
+		lines := strings.Split(content, "\n")
+		firstIdx := -1
+		for i, l := range lines {
+			if strings.Contains(l, "line one") {
+				firstIdx = i
+				break
+			}
+		}
+		if assert.NotEqual(t, -1, firstIdx, "expected to find the annotation's first line") {
+			prefix := "  "
+			assert.Equal(t, strings.Repeat(" ", len(prefix))+"line two", lines[firstIdx+1])
+		}
 	})
 
 	t.Run("shows placeholder when no task selected", func(t *testing.T) {

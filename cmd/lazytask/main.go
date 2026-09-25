@@ -2447,26 +2447,72 @@ func (m model) detailsPanelContent() string {
 	due := task.Due
 	if due == "" {
 		due = "(none)"
+	} else {
+		due = formatDetailsDate(due)
 	}
 
 	lines := []string{
 		fmt.Sprintf("ID:          %d", task.ID),
 		fmt.Sprintf("UUID:        %s", task.UUID),
 		fmt.Sprintf("Description: %s", task.Description),
-		fmt.Sprintf("Status:      %s", task.Status),
+	}
+	if len(task.Annotations) > 0 {
+		lines = append(lines, "Annotations:")
+		for _, a := range task.Annotations {
+			lines = append(lines, renderAnnotationLines(a)...)
+		}
+	}
+	lines = append(lines,
 		fmt.Sprintf("Project:     %s", project),
 		fmt.Sprintf("Tags:        %s", tags),
 		fmt.Sprintf("Priority:    %s", priority),
-		fmt.Sprintf("Due:         %s", due),
 		fmt.Sprintf("Urgency:     %.2f", task.Urgency),
 		fmt.Sprintf("Urg.Offset:  %.4f", task.UrgencyOffset),
-		fmt.Sprintf("Entry:       %s", task.Entry),
-		fmt.Sprintf("Modified:    %s", task.Modified),
-	}
+		fmt.Sprintf("Status:      %s", task.Status),
+		fmt.Sprintf("Due:         %s", due),
+		fmt.Sprintf("Entry:       %s", formatDetailsDate(task.Entry)),
+		fmt.Sprintf("Modified:    %s", formatDetailsDate(task.Modified)),
+	)
 	if task.End != "" {
-		lines = append(lines, fmt.Sprintf("End:         %s", task.End))
+		lines = append(lines, fmt.Sprintf("End:         %s", formatDetailsDate(task.End)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// formatDetailsDate reformats a Taskwarrior timestamp (e.g. "20250101T000000Z",
+// per taskDueLayout) as "YYYY-MM-DD" for display in the Details panel. If the
+// value doesn't parse as a Taskwarrior timestamp, it's returned unchanged
+// rather than dropped, so unexpected formats still show something useful.
+func formatDetailsDate(value string) string {
+	t, err := time.Parse(taskDueLayout, value)
+	if err != nil {
+		return value
+	}
+	return t.Format("2006-01-02")
+}
+
+// renderAnnotationLines renders one annotation as one or more Details-panel
+// lines: "  <first line of Description>", with any subsequent lines of a
+// multi-line Description (possible via `task annotate` with embedded
+// newlines, or the $EDITOR buffer's escaped-newline round trip) indented to
+// align under the first line's text rather than starting back at the left
+// margin, so a multi-line annotation still reads as one annotation rather
+// than looking like several unrelated ones. The Entry timestamp is
+// intentionally omitted; it adds clutter without much value here.
+func renderAnnotationLines(a taskwarrior.Annotation) []string {
+	const prefix = "  "
+	indent := strings.Repeat(" ", len(prefix))
+
+	descLines := strings.Split(a.Description, "\n")
+	rendered := make([]string, len(descLines))
+	for i, line := range descLines {
+		if i == 0 {
+			rendered[i] = prefix + line
+		} else {
+			rendered[i] = indent + line
+		}
+	}
+	return rendered
 }
 
 // renderGrid lays out the lazygit-style panel grid: a left column of 3
