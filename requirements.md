@@ -108,14 +108,6 @@ than a human would spend minutes:
 
 ## 7. Outstanding Phases to be Completed
 
-### Phase 4 — CI / CD
-
-- I would like CI CD setup for lazy task to auto build on push
-- Update the readme to communicate to uses
-- I want an install command to install on linux or macos. Install latest version if not already. The idea is to make this highly portable,
-- having `lazytask update` would be a huge plus
-- 0.0.X visioning for now, will v1 when I am happy
-
 ### Phase 5 — Remote Task Data
 
 - **Remote task data** - Allow for a remote mode an local mode for tasks state.
