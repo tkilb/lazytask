@@ -108,18 +108,6 @@ than a human would spend minutes:
 
 ## 7. Outstanding Phases to be Completed
 
-### Phase 2 — Bug Fixes
-
-- [x] **Undo failing to undo edits** — undo does not correctly revert edits
-      made to a task.
-- [x] **Editor: `m` → `M` for priority** — fix the edit-form logic so
-      lowercase `m` is normalized/mapped to the `M` (medium) priority value
-      taskwarrior expects. This should account for med -> M, high->H, HIGH->H as well as low -> L etc
-- [ ] **Resolve shorthand dates in edit, same as add popup** — the edit flow
-      should reuse the existing `internal/dateparse` shorthand resolution
-      (e.g. `2d`, `1w`, `2b`) that the add popup already supports, instead of
-      requiring literal dates.
-
 ### Phase 2b — Anotations
 
 - [ ] Switch the edit popup to have a separate field for annotations, restore 'description' to be a single line field

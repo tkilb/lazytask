@@ -6,7 +6,7 @@
 //	Project: <text>
 //	Tags: tag1, tag2
 //	Priority: <text>
-//	Due: <text>
+//	Due: <YYYY-MM-DD, or shorthand like 2d/1w/2b when edited>
 //	---
 //	ID: <int>
 //	UUID: <string>
@@ -21,12 +21,19 @@
 // Everything below the divider is read-only reference: it is rendered for
 // display only and is never parsed back into the edited task, so any edits
 // a user makes there are silently ignored rather than treated as an error.
+//
+// Due is displayed as a plain YYYY-MM-DD date (see displayDue) rather than
+// taskwarrior's raw combined date/time format, but when saved it's
+// resolved by cmd/lazytask's resolveEditedDue, which also accepts the same
+// shorthand cords ("2d", "1w", "2b") and flexible absolute dates the add
+// form's Due Date field supports.
 package editbuffer
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 )
@@ -34,6 +41,17 @@ import (
 // divider marks the boundary between the editable section and the
 // read-only reference section.
 const divider = "---"
+
+// taskDueLayout is Taskwarrior's combined UTC export/import format for
+// date attributes (e.g. "20240115T140000Z"), matching cmd/lazytask's
+// taskDueLayout constant.
+const taskDueLayout = "20060102T150405Z"
+
+// displayDueLayout is the human-friendly format the Due field is shown in
+// (YYYY-MM-DD); the editable buffer still accepts shorthand cords (e.g.
+// "2d", "1w", "2b") or any other format cmd/lazytask's resolveEditedDue
+// understands when the field is edited and saved.
+const displayDueLayout = "2006-01-02"
 
 // editableKeys are the recognized field labels in the editable section, in
 // the order they're written by Serialize.
@@ -58,7 +76,7 @@ func Serialize(t taskwarrior.Task) string {
 	fmt.Fprintf(&b, "Project: %s\n", t.Project)
 	fmt.Fprintf(&b, "Tags: %s\n", strings.Join(t.Tags, ", "))
 	fmt.Fprintf(&b, "Priority: %s\n", t.Priority)
-	fmt.Fprintf(&b, "Due: %s\n", t.Due)
+	fmt.Fprintf(&b, "Due: %s\n", displayDue(t.Due))
 	b.WriteString(divider + "\n")
 	fmt.Fprintf(&b, "ID: %d\n", t.ID)
 	fmt.Fprintf(&b, "UUID: %s\n", t.UUID)
@@ -188,6 +206,22 @@ func parseTags(value string) []string {
 		}
 	}
 	return tags
+}
+
+// displayDue renders a task's raw Due value (taskDueLayout, e.g.
+// "20240115T140000Z") as a human-friendly YYYY-MM-DD date for display in
+// the buffer. An empty due date stays empty. A value that doesn't parse as
+// taskDueLayout (unexpected, but tolerated) is passed through unchanged
+// rather than dropped, so it's still visible/editable.
+func displayDue(due string) string {
+	if due == "" {
+		return ""
+	}
+	t, err := time.Parse(taskDueLayout, due)
+	if err != nil {
+		return due
+	}
+	return t.Local().Format(displayDueLayout)
 }
 
 // formatFloat renders a read-only reference float field (Urgency,

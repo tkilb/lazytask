@@ -2,12 +2,31 @@ package editbuffer
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 )
+
+func TestSerialize_DisplaysDueAsYYYYMMDD(t *testing.T) {
+	task := taskwarrior.Task{Description: "Buy milk", Due: "20250101T000000Z"}
+
+	buf := Serialize(task)
+
+	wantDue, err := time.Parse(taskDueLayout, task.Due)
+	require.NoError(t, err)
+	assert.Contains(t, buf, "Due: "+wantDue.Local().Format(displayDueLayout)+"\n")
+}
+
+func TestSerialize_BlankDueStaysBlank(t *testing.T) {
+	task := taskwarrior.Task{Description: "Buy milk"}
+
+	buf := Serialize(task)
+
+	assert.Contains(t, buf, "Due: \n")
+}
 
 func TestSerializeParseRoundTrip(t *testing.T) {
 	task := taskwarrior.Task{
@@ -31,7 +50,13 @@ func TestSerializeParseRoundTrip(t *testing.T) {
 	assert.Equal(t, task.Description, fields.Description)
 	assert.Equal(t, task.Project, fields.Project)
 	assert.Equal(t, task.Priority, fields.Priority)
-	assert.Equal(t, task.Due, fields.Due)
+	// The Due field is round-tripped through its human-friendly
+	// YYYY-MM-DD display form (see displayDue), not the raw taskwarrior
+	// timestamp, so compare against that same conversion rather than the
+	// raw value.
+	wantDue, err := time.Parse(taskDueLayout, task.Due)
+	require.NoError(t, err)
+	assert.Equal(t, wantDue.Local().Format(displayDueLayout), fields.Due)
 	assert.Equal(t, task.Tags, fields.Tags)
 }
 

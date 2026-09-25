@@ -1051,6 +1051,29 @@ func setPriorityTask(prioritizer TaskPrioritizer, task taskwarrior.Task, priorit
 // dateformat.
 const taskDueLayout = "20060102T150405Z"
 
+// resolveEditedDue resolves the Due field's text as read back from the
+// $EDITOR edit buffer (see internal/editbuffer) into the taskDueLayout
+// string taskwarrior expects, or reports it as invalid. An empty/blank
+// input clears the due date. A value already in taskDueLayout (i.e.
+// unchanged from what Serialize wrote out) passes through unchanged.
+// Otherwise it's resolved via datepick.ResolveInput relative to now —
+// the same cord ("2d", "1w", "2b") and flexible-absolute-date parsing the
+// add form's Due Date field uses — so the edit flow no longer requires a
+// literal taskwarrior-format date.
+func resolveEditedDue(input string, now time.Time) (due string, ok bool) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", true
+	}
+	if _, err := time.Parse(taskDueLayout, trimmed); err == nil {
+		return trimmed, true
+	}
+	if resolved, ok := datepick.ResolveInput(trimmed, now); ok {
+		return resolved.UTC().Format(taskDueLayout), true
+	}
+	return "", false
+}
+
 // setDueTask returns a tea.Cmd that sets task's due date to due via duer,
 // returning an undo.Action that reverses it back to the task's prior due
 // date (which may be empty, clearing it back to "no due date").
@@ -1168,17 +1191,21 @@ func editTask(importer TaskImporter, task taskwarrior.Task) tea.Cmd {
 		return func() tea.Msg { return taskEditErrMsg{err: err} }
 	}
 
-	return tea.ExecProcess(cmd, editTaskCallback(importer, session, task))
+	return tea.ExecProcess(cmd, editTaskCallback(importer, session, task, time.Now))
 }
 
 // editTaskCallback builds the tea.ExecCallback run once the editor process
 // launched by editTask exits: it reads back session's temp file, parses
-// its editable fields, applies them onto original (preserving read-only
-// fields such as UUID untouched, regardless of what the user may have
-// typed in that section of the buffer), and re-imports the result via
-// importer. Split out from editTask so it can be unit-tested without going
-// through tea.ExecProcess/a real editor process.
-func editTaskCallback(importer TaskImporter, session *editor.Session, original taskwarrior.Task) func(error) tea.Msg {
+// its editable fields, resolves the Due field's shorthand (see
+// resolveEditedDue) exactly like the add form's Due Date field does,
+// applies the result onto original (preserving read-only fields such as
+// UUID untouched, regardless of what the user may have typed in that
+// section of the buffer), and re-imports the result via importer. now is
+// the reference instant the Due field's cord is resolved relative to
+// (time.Now in production, fixed in tests). Split out from editTask so it
+// can be unit-tested without going through tea.ExecProcess/a real editor
+// process.
+func editTaskCallback(importer TaskImporter, session *editor.Session, original taskwarrior.Task, now func() time.Time) func(error) tea.Msg {
 	return func(err error) tea.Msg {
 		defer session.Close()
 		if err != nil {
@@ -1197,6 +1224,13 @@ func editTaskCallback(importer TaskImporter, session *editor.Session, original t
 		if strings.TrimSpace(original.UUID) == "" {
 			return taskEditErrMsg{err: fmt.Errorf("edited task is missing its uuid; not importing")}
 		}
+
+		due, ok := resolveEditedDue(fields.Due, now())
+		if !ok {
+			return taskEditErrMsg{err: fmt.Errorf("invalid due date %q", fields.Due)}
+		}
+		fields.Due = due
+
 		updated := editbuffer.Apply(original, fields)
 
 		originalSnapshot, err := json.Marshal(original)

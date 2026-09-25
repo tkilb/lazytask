@@ -1923,7 +1923,7 @@ func TestEditTaskCallback_ImportsEditedTask(t *testing.T) {
 	defer session.Close()
 
 	importer := &stubImporter{}
-	msg := editTaskCallback(importer, session, original)(nil)
+	msg := editTaskCallback(importer, session, original, time.Now)(nil)
 
 	edited, ok := msg.(taskEditedMsg)
 	assert.True(t, ok)
@@ -1958,7 +1958,7 @@ func TestEditTaskCallback_EditorErrorSkipsImport(t *testing.T) {
 	defer session.Close()
 
 	importer := &stubImporter{}
-	msg := editTaskCallback(importer, session, original)(errors.New("boom"))
+	msg := editTaskCallback(importer, session, original, time.Now)(errors.New("boom"))
 
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
@@ -1973,7 +1973,7 @@ func TestEditTaskCallback_MissingUUIDSkipsImport(t *testing.T) {
 	defer session.Close()
 
 	importer := &stubImporter{}
-	msg := editTaskCallback(importer, session, original)(nil)
+	msg := editTaskCallback(importer, session, original, time.Now)(nil)
 
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
@@ -1988,12 +1988,122 @@ func TestEditTaskCallback_MalformedBufferSkipsImport(t *testing.T) {
 	defer session.Close()
 
 	importer := &stubImporter{}
-	msg := editTaskCallback(importer, session, original)(nil)
+	msg := editTaskCallback(importer, session, original, time.Now)(nil)
 
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
 	assert.Contains(t, errMsg.err.Error(), "Description")
 	assert.Empty(t, importer.calls)
+}
+
+func TestEditTaskCallback_ResolvesShorthandDue(t *testing.T) {
+	fixedNow := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
+	original := taskwarrior.Task{UUID: "abc-123", Description: "Buy milk", Status: "pending"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(taskwarrior.Task{
+		UUID: "abc-123", Description: "Buy milk", Status: "pending", Due: "2d",
+	}))
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session, original, func() time.Time { return fixedNow })(nil)
+
+	_, ok := msg.(taskEditedMsg)
+	assert.True(t, ok)
+	require.Len(t, importer.calls, 1)
+
+	var got taskwarrior.Task
+	require.NoError(t, json.Unmarshal(importer.calls[0], &got))
+	assert.Equal(t, "20240112T120000Z", got.Due)
+}
+
+func TestEditTaskCallback_UnchangedDueRoundTripsToSameDate(t *testing.T) {
+	fixedNow := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
+	original := taskwarrior.Task{UUID: "abc-123", Description: "Buy milk", Status: "pending", Due: "20240115T140000Z"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(original))
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session, original, func() time.Time { return fixedNow })(nil)
+
+	_, ok := msg.(taskEditedMsg)
+	assert.True(t, ok)
+	require.Len(t, importer.calls, 1)
+
+	var got taskwarrior.Task
+	require.NoError(t, json.Unmarshal(importer.calls[0], &got))
+	// The edit buffer only ever displays/round-trips the Due field as a
+	// YYYY-MM-DD date (see editbuffer.Serialize), so leaving it untouched
+	// resolves back to midnight (local) on the same calendar date rather
+	// than preserving the original time-of-day.
+	parsedOriginal, err := time.Parse(taskDueLayout, original.Due)
+	require.NoError(t, err)
+	wantDue, ok := datepick.ResolveInput(parsedOriginal.Local().Format("2006-01-02"), fixedNow)
+	require.True(t, ok)
+	assert.Equal(t, wantDue.UTC().Format(taskDueLayout), got.Due)
+}
+
+func TestEditTaskCallback_ClearsBlankDue(t *testing.T) {
+	fixedNow := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
+	original := taskwarrior.Task{UUID: "abc-123", Description: "Buy milk", Status: "pending", Due: "20240115T140000Z"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(taskwarrior.Task{
+		UUID: "abc-123", Description: "Buy milk", Status: "pending",
+	}))
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session, original, func() time.Time { return fixedNow })(nil)
+
+	_, ok := msg.(taskEditedMsg)
+	assert.True(t, ok)
+	require.Len(t, importer.calls, 1)
+
+	var got taskwarrior.Task
+	require.NoError(t, json.Unmarshal(importer.calls[0], &got))
+	assert.Empty(t, got.Due)
+}
+
+func TestEditTaskCallback_InvalidDueSkipsImport(t *testing.T) {
+	original := taskwarrior.Task{UUID: "abc-123", Description: "Buy milk", Status: "pending"}
+	_, session, err := editor.Prepare(editbuffer.Serialize(taskwarrior.Task{
+		UUID: "abc-123", Description: "Buy milk", Status: "pending", Due: "not a date",
+	}))
+	require.NoError(t, err)
+	defer session.Close()
+
+	importer := &stubImporter{}
+	msg := editTaskCallback(importer, session, original, time.Now)(nil)
+
+	errMsg, ok := msg.(taskEditErrMsg)
+	require.True(t, ok)
+	assert.Contains(t, errMsg.err.Error(), "due date")
+	assert.Empty(t, importer.calls)
+}
+
+func TestResolveEditedDue(t *testing.T) {
+	fixedNow := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		input   string
+		wantDue string
+		wantOK  bool
+	}{
+		{name: "blank clears due date", input: "  ", wantDue: "", wantOK: true},
+		{name: "shorthand cord resolves", input: "2d", wantDue: "20240112T120000Z", wantOK: true},
+		{name: "literal taskwarrior format passes through", input: "20240115T140000Z", wantDue: "20240115T140000Z", wantOK: true},
+		{name: "invalid input is rejected", input: "not a date", wantDue: "", wantOK: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			due, ok := resolveEditedDue(tc.input, fixedNow)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantDue, due)
+		})
+	}
 }
 
 func TestModelUpdate_NumberKeysChangeFocus(t *testing.T) {
@@ -2296,7 +2406,7 @@ func TestEditTaskCallback_ImportErrSetsErrMsg(t *testing.T) {
 	defer session.Close()
 
 	importer := &stubImporter{err: errors.New("import failed")}
-	msg := editTaskCallback(importer, session, original)(nil)
+	msg := editTaskCallback(importer, session, original, time.Now)(nil)
 
 	errMsg, ok := msg.(taskEditErrMsg)
 	require.True(t, ok)
