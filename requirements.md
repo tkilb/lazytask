@@ -108,29 +108,13 @@ than a human would spend minutes:
 
 ## 7. Outstanding Phases to be Completed
 
-### Phase 3 — Tags (continuation)
+### Phase 4 — CI / CD
 
-Tags panel (key 4) has already shipped. Remaining scope:
-
-- [ ] 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
-      If keyed in, there will be a comma delimited list and the mode will be replacement instead.
-- [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
-- [ ] Add tags to the add form, should come before due date
-- [ ] Add '/' search to tags just like as seen in projects
-
-### Phase 4 — UX Enhancements
-
-- [ ] **Redo status bar, maybe rename to "suggested"** — revisit the status
-      bar's current design/labeling.
-- [ ] **Better tasklist column headers and date display** — improve column
-      header clarity and how due/other dates are formatted in the task list.
-- [ ] **Purge all** — bulk-purge action for tasks (needs scope/safety
-      clarification before chunking — see Section 5's ask-before-assuming
-      rule).
-- [ ] **Keyboard hints popup via `?`** — a help overlay listing current key
-      bindings.
-- [ ] **Funnel for adhoc tasks** — a quick-capture flow for one-off/adhoc
-      tasks (needs scope clarification before chunking).
+- I would like CI CD setup for lazy task to auto build on push
+- Update the readme to communicate to uses
+- I want an install command to install on linux or macos. Install latest version if not already. The idea is to make this highly portable,
+- having `lazytask update` would be a huge plus
+- 0.0.X visioning for now, will v1 when I am happy
 
 ### Phase 5 — Remote Task Data
 
@@ -230,9 +214,31 @@ here):**
   than hardcoded, consistent with the rest of Phase 5's config-driven
   items.
 
-### Phase 6 — Configurable Keymaps & Custom User Actions
+### Phase 6 — UX Enhancements
 
-Always last, per standing instruction.
+- [ ] **Redo status bar, maybe rename to "suggested"** — revisit the status
+      bar's current design/labeling.
+- [ ] **Better tasklist column headers and date display** — improve column
+      header clarity and how due/other dates are formatted in the task list.
+- [ ] **Purge all** — bulk-purge action for tasks (needs scope/safety
+      clarification before chunking — see Section 5's ask-before-assuming
+      rule).
+- [ ] **Keyboard hints popup via `?`** — a help overlay listing current key
+      bindings.
+- [ ] **Funnel for adhoc tasks** — a quick-capture flow for one-off/adhoc
+      tasks (needs scope clarification before chunking).
+
+### Phase 7 — Tags (continuation)
+
+Tags panel (key 4) has already shipped. Remaining scope:
+
+- [ ] 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
+      If keyed in, there will be a comma delimited list and the mode will be replacement instead.
+- [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
+- [ ] Add tags to the add form, should come before due date
+- [ ] Add '/' search to tags just like as seen in projects
+
+## 8 Future Ideas
 
 - **Configurable keymaps via YAML** — user-overridable key bindings for
   existing actions (list nav, add/done/delete/edit), loaded via the existing
@@ -242,7 +248,7 @@ Always last, per standing instruction.
   own quick-actions (e.g. canned `task` command templates) in config. Needs
   a decision on the templating/placeholder syntax before chunking.
 
-## 8. Open Questions / Assumptions Log
+## 9. Open Questions / Assumptions Log
 
 - Assuming taskwarrior (`task` binary) is already installed on the target
   dev machine and CI runners used for integration tests; if not,
