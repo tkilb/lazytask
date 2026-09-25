@@ -99,7 +99,7 @@ func Parse(content string) (EditableFields, error) {
 			case "Project":
 				fields.Project = value
 			case "Priority":
-				fields.Priority = value
+				fields.Priority = normalizePriority(value)
 			case "Due":
 				fields.Due = value
 			case "Tags":
@@ -146,6 +146,30 @@ func matchKey(line string) (key string, value string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// normalizePriority maps a free-typed Priority field value onto the literal
+// H/M/L codes taskwarrior expects. It's case-insensitive and, besides the
+// single-letter codes themselves, recognizes the common full/shortened
+// words ("high", "med"/"medium", "low"). An empty value stays empty
+// (caller/taskwarrior treats that as "no priority" rather than defaulting
+// to M). Anything else unrecognized is passed through unchanged (trimmed
+// and upper-cased) so a genuinely invalid value still surfaces as an error
+// from taskwarrior's import rather than being silently discarded here.
+func normalizePriority(value string) string {
+	v := strings.ToUpper(strings.TrimSpace(value))
+	switch v {
+	case "":
+		return ""
+	case "H", "HIGH":
+		return "H"
+	case "M", "MED", "MEDIUM":
+		return "M"
+	case "L", "LOW":
+		return "L"
+	default:
+		return v
+	}
 }
 
 // parseTags splits a comma-separated Tags value into individual tags,

@@ -81,6 +81,42 @@ func TestParse_TagsWhitespaceTrimmed(t *testing.T) {
 	assert.Equal(t, []string{"one", "two", "three"}, fields.Tags)
 }
 
+func TestParse_PriorityNormalization(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"H", "H"},
+		{"h", "H"},
+		{"HIGH", "H"},
+		{"high", "H"},
+		{"High", "H"},
+		{"M", "M"},
+		{"m", "M"},
+		{"med", "M"},
+		{"MED", "M"},
+		{"medium", "M"},
+		{"Medium", "M"},
+		{"L", "L"},
+		{"l", "L"},
+		{"low", "L"},
+		{"LOW", "L"},
+		{"", ""},
+		{"  ", ""},
+		{"  m  ", "M"},
+	}
+
+	for _, tc := range cases {
+		buf := "Description: task\n" +
+			"Priority: " + tc.input + "\n" +
+			"---\n"
+
+		fields, err := Parse(buf)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, fields.Priority, "input %q", tc.input)
+	}
+}
+
 func TestParse_NoDividerStillParsesEditableSection(t *testing.T) {
 	buf := "Description: no divider here\nProject: solo\n"
 

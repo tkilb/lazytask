@@ -112,17 +112,25 @@ than a human would spend minutes:
 
 - [x] **Undo failing to undo edits** — undo does not correctly revert edits
       made to a task.
-- [ ] **Editor: `m` → `M` for priority** — fix the edit-form logic so
+- [x] **Editor: `m` → `M` for priority** — fix the edit-form logic so
       lowercase `m` is normalized/mapped to the `M` (medium) priority value
       taskwarrior expects. This should account for med -> M, high->H, HIGH->H as well as low -> L etc
 - [ ] **Resolve shorthand dates in edit, same as add popup** — the edit flow
       should reuse the existing `internal/dateparse` shorthand resolution
       (e.g. `2d`, `1w`, `2b`) that the add popup already supports, instead of
       requiring literal dates.
+
+### Phase 2b — Anotations
+
+- [ ] Switch the edit popup to have a separate field for annotations, restore 'description' to be a single line field
+- Annotations needs to support multi line, for this one field <enter> will line break instead of submit
+- Edit buffer now needs to account for anotations
 - [ ] **Task panel must account for multi-line line breaks** — task
       descriptions/annotations containing embedded newlines currently break
       the tasks panel's row rendering; needs correct height
       calculation/wrapping.
+
+- [ ] Switch the edit popup to have a separate field for annotations
 
 ### Phase 3 — Tags (continuation)
 
