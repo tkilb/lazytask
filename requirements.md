@@ -98,6 +98,16 @@ than a human would spend minutes:
 - **No speculative work.** Agents must not implement future-phase features
   (Section 7), refactor unrelated code, add dependencies not listed in
   Section 2, or fetch external repos/docs "for inspiration" mid-task.
+- **Updating this document is MANDATORY, not optional.** Before reporting a
+  chunk as done (Section 5 step 3), and immediately after any planning
+  discussion that resolves an open question/decision (even before code is
+  written), the agent MUST update this requirements.md to reflect: (a) any
+  decision just made (recorded so it isn't re-litigated later), (b) status
+  of the relevant chunk/checklist item, and (c) any new sub-tasks or
+  chunking plan that resulted from the discussion. This applies even if the
+  human hasn't explicitly asked for a doc update. This edit is part of the
+  same chunk/turn and does not itself require a separate sign-off, but it
+  must be included in what the human reviews before approving.
 - **Hard stop conditions** — a worker agent must halt and report rather than
   continue if it: needs a new third-party dependency, needs to modify more
   than one chunk's worth of prior work, encounters ambiguity in this spec,
@@ -120,8 +130,9 @@ than a human would spend minutes:
   encryption + a history purge (below) are extra defense-in-depth layers in
   case that repo is ever exposed.
 
-  **Status: chunks 1–3 committed; chunk 4 complete (uncommitted, awaiting
-  sign-off); history purge routine below not started.**
+  **Status: chunks 1–4 committed. History purge routine and auto-sync are
+  both fully designed/decided (see below) but have no code written yet —
+  awaiting sign-off to start the first chunk of either.**
 
   - ✅ **Chunk 1 — Sync config plumbing.** `internal/config.GitSyncConfig` +
     `LoadGitSyncConfig()` read `sync.git.*` from a fixed, hand-editable
@@ -164,7 +175,9 @@ than a human would spend minutes:
     permanently invalidates decryption of any history already pushed
     under the old secret and requires updating every other device sharing
     the sync repo.
-  - **Not yet done:** the history purge routine below.
+  - **Not yet done:** the history purge routine below, and the
+    auto-sync feature described further below. Neither has any code
+    written yet as of this update — decisions/design only.
   - **History retention/purge** — TaskChampion's built-in version-file
     cleanup only prunes already-snapshotted files and defaults to a
     hardcoded 180-day retention (not configurable via `task config`); it
@@ -224,18 +237,29 @@ purge-tmp && git add -A && git commit` to create one fresh, parentless
    step 2 — do not reuse TaskChampion's own pull-and-reset retry logic,
    which is designed for appending versions, not rewriting history.
 
-**Known side effects / open questions for the chunking agent (not decided
-here):**
+**Known side effects / open questions for the chunking agent:**
 
 - Squashing resets TaskChampion's own internal per-file "age" tracking
   (since it's derived from `git log`), effectively restarting its 180-day
   cleanup timer. Harmless — our external 7-day purge supersedes it — but
   should be documented so it isn't mistaken for a bug later.
-- **Every other replica/device syncing against this repo must also discard
-  its old local clone/history after a purge**, or it can silently
-  resurrect "deleted" history on its next push. Needs a coordination story
-  (e.g. detect a rewritten root commit and force re-clone) before this is
-  safe to ship for multi-device use.
+- ~~Every other replica/device syncing against this repo must also
+  discard its old local clone/history after a purge...~~ **RESOLVED,
+  2026-09-29: not actually a risk.** Verified directly against
+  TaskChampion's git-sync source (`src/server/gitsync/mod.rs`): every sync
+  operation (not just ours) already calls `reset_to_remote()`, which does
+  `git fetch <remote> <branch>` into `FETCH_HEAD` followed by an
+  unconditional `git reset --hard FETCH_HEAD` — called before every
+  read/write and specifically on push rejection. This is a hard reset, not
+  a merge/rebase, so it has no dependency on shared ancestry: `git fetch`
+  can't be "rejected" by a rewritten history (it only updates `FETCH_HEAD`,
+  not a local branch ref), and `reset --hard` adopts the new tree
+  unconditionally even with zero common ancestor. **Conclusion: no
+  "lockout" risk.** Every other device self-heals automatically on its
+  very next `task sync` after our purge force-pushes a squashed/orphan
+  history — no manual re-clone or special "detect rewritten root"
+  safeguard is needed. The multi-device-coordination chunk originally
+  planned for this has been dropped from the plan as unnecessary.
 - **Force-push + local `git gc` is mitigation, not a guarantee of remote
   deletion.** Hosts such as GitHub commonly retain unreachable objects for
   a grace window (historically up to ~90 days) before their own background
@@ -243,14 +267,78 @@ here):**
   full history regardless of what this routine does. This must be
   documented to the user as defense-in-depth on top of "keep the repo
   private," not an absolute guarantee.
-- Trigger mechanism still needs a decision: lazytask-internal
-  timer/hook vs. a separate external cron script the user manages.
-  Leaning toward starting with an external script, since a
-  history-rewriting operation is riskier to run inside the TUI process's
-  own lifecycle.
-- Retention window (7 days) should probably be YAML-configurable rather
-  than hardcoded, consistent with the rest of Phase 5's config-driven
-  items.
+- ~~Trigger mechanism still needs a decision...~~ **DECIDED, 2026-09-29:
+  lazytask-internal** (runs on a schedule inside lazytask's own process
+  lifecycle, not an external cron script the user manages — the doc had
+  previously leaned toward external, but the human explicitly chose
+  internal).
+- ~~Retention window (7 days) should probably be YAML-configurable...~~
+  **DECIDED, 2026-09-29: yes, YAML-configurable**, consistent with the
+  rest of Phase 5's config-driven items (exact key name TBD at chunking
+  time, following the `sync.git.*` convention).
+
+**Revised chunking plan for the purge routine (decided 2026-09-29, no code
+written yet):**
+
+1. **Purge config plumbing** — add a `sync.git.*` retention-window field
+   (default 7 days) to `GitSyncConfig`/`LoadGitSyncConfig`, mirroring the
+   existing pattern. Config surface + tests only, no purge logic yet
+   ("explicit interfaces first," per Section 6).
+2. **Purge git operations (core routine)** — the squash/force-push/gc
+   sequence above, exposed as a testable Go function (e.g.
+   `taskwarrior.Client.PurgeSyncHistory`), invokable manually but not yet
+   auto-triggered.
+3. **Internal scheduling/trigger** — wire it into lazytask's own lifecycle
+   (background ticker checking last-purge time vs. retention), with
+   locking against a concurrent `task sync`.
+   (A 4th "multi-device coordination safeguard" chunk was considered but
+   dropped — see the resolved bullet above.)
+
+**Auto-sync (new feature, decided 2026-09-29, not in the original Section 7
+list — added here since it's a natural extension of Phase 5 and reuses the
+same internal-scheduling mechanism as the purge routine above; no code
+written yet):**
+
+Currently `task sync` only runs when the user presses `S` (Chunk 2, already
+shipped). Human requested this instead run automatically so devices that
+"constantly sync" don't have to remember to press a key. Decided design:
+
+- **Triggers, both of the following (not either/or):**
+  - **Periodic**: a background timer while lazytask is open, interval
+    YAML-configurable via `sync.git.auto_sync_interval_minutes` (default
+    5).
+  - **On-mutation**: after any local task mutation — add, done, delete,
+    restore, purge, priority, due, project, reorder, edit — **except**
+    undo/redo (human's call: undo/redo should stay sync-exempt; the
+    periodic timer will eventually pick up whatever state they left).
+    Debounced (~2s quiet period) so a burst of mutations (e.g. reordering
+    several tasks in a row) coalesces into a single `task sync` instead of
+    firing once per keypress.
+- **Manual `S` key stays exactly as-is** (unchanged popup on both success
+  and failure).
+- **Auto-sync (periodic + on-mutation) UI is intentionally quiet**: no
+  "Sync complete" popup on success; on failure, a status-line indicator
+  only (no popup interruption). This needs new message types
+  (`autoSyncedMsg`/`autoSyncErrMsg`) distinct from the existing manual
+  `taskSyncedMsg`/`taskSyncErrMsg`, since the manual path's popups must be
+  preserved unchanged.
+
+**Chunking plan for auto-sync:**
+
+1. ✅ **Periodic auto-sync (committed, `734ef18`)** —
+   `sync.git.auto_sync_interval_minutes` config (default 5) +
+   a `tea.Tick`-driven background timer that runs `task sync` silently,
+   with quiet status-line-only failure reporting (`autoSyncTickMsg`,
+   `autoSyncedMsg`, `autoSyncErrMsg`). No on-mutation hook yet.
+2. ✅ **On-mutation auto-sync (complete, uncommitted, awaiting sign-off)** —
+   `mutationSyncGen`/`mutationSyncDebounceMsg`/`scheduleMutationAutoSync`
+   wire a debounced (2s quiet period) trigger into all 10
+   mutation-success message cases (add, done, delete, restore, purge,
+   priority, due, project, reorder, edit), reusing chunk 1's quiet
+   `runAutoSync` path. Undo/redo are confirmed excluded. A generation
+   counter ensures only the most recent mutation in a burst actually
+   fires a sync (earlier, superseded timers become no-ops). Both
+   chunks of the auto-sync plan are now done.
 
 ### Phase 6 — UX Enhancements
 

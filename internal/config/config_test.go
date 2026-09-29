@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,6 +157,28 @@ func TestLoadGitSyncConfig_Malformed(t *testing.T) {
 
 	_, err := LoadGitSyncConfig()
 	assert.Error(t, err)
+}
+
+func TestLoadGitSyncConfig_AutoSyncIntervalMinutes(t *testing.T) {
+	configDir := withTempAppConfigDir(t)
+	writeAppConfig(t, configDir, `
+sync:
+  git:
+    auto_sync_interval_minutes: 10
+`)
+
+	got, err := LoadGitSyncConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 10, got.AutoSyncIntervalMinutes)
+}
+
+func TestGitSyncConfig_AutoSyncInterval_DefaultsWhenUnset(t *testing.T) {
+	assert.Equal(t, DefaultAutoSyncIntervalMinutes*time.Minute, GitSyncConfig{}.AutoSyncInterval())
+}
+
+func TestGitSyncConfig_AutoSyncInterval_HonorsExplicitValue(t *testing.T) {
+	cfg := GitSyncConfig{AutoSyncIntervalMinutes: 15}
+	assert.Equal(t, 15*time.Minute, cfg.AutoSyncInterval())
 }
 
 func TestEnsureSyncSecret_GeneratesAndPersists(t *testing.T) {

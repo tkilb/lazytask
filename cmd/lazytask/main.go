@@ -530,57 +530,101 @@ type taskSyncErrMsg struct {
 	err error
 }
 
+// autoSyncTickMsg fires when the periodic background auto-sync timer
+// elapses (see autoSyncTick), triggering a silent `task sync` run.
+type autoSyncTickMsg struct{}
+
+// autoSyncedMsg indicates a background (periodic) `task sync` run
+// completed successfully. Unlike taskSyncedMsg, this is deliberately
+// quiet: no popup is shown on success (see requirements.md's auto-sync
+// section).
+type autoSyncedMsg struct{}
+
+// autoSyncErrMsg carries the error from a failed background `task sync`
+// run. Unlike taskSyncErrMsg, this is reported via a quiet status-line
+// indicator rather than an interrupting popup.
+type autoSyncErrMsg struct {
+	err error
+}
+
+// mutationSyncDebounce is the quiet period after a local task mutation
+// before the on-mutation auto-sync trigger fires (see requirements.md's
+// auto-sync section). A burst of mutations within this window (e.g.
+// reordering several tasks in a row) coalesces into a single `task sync`
+// instead of firing once per mutation.
+const mutationSyncDebounce = 2 * time.Second
+
+// mutationSyncDebounceMsg fires once mutationSyncDebounce elapses since
+// the mutation that scheduled it (see scheduleMutationSync). gen is
+// checked against model.mutationSyncGen so that only the most recent
+// mutation in a burst actually triggers a sync — earlier, superseded
+// timers become no-ops.
+type mutationSyncDebounceMsg struct {
+	gen int
+}
+
+// scheduleMutationSync returns a tea.Cmd that fires a mutationSyncDebounceMsg
+// carrying gen once the debounce quiet period elapses.
+func scheduleMutationSync(gen int) tea.Cmd {
+	return tea.Tick(mutationSyncDebounce, func(time.Time) tea.Msg {
+		return mutationSyncDebounceMsg{gen: gen}
+	})
+}
+
 type model struct {
-	reader         TaskReader
-	adder          TaskAdder
-	doner          TaskDoner
-	deleter        TaskDeleter
-	restorer       TaskRestorer
-	purger         TaskPurger
-	importer       TaskImporter
-	prioritizer    TaskPrioritizer
-	reranker       TaskReRanker
-	duer           TaskDueSetter
-	projecter      TaskProjectSetter
-	annotator      TaskAnnotator
-	syncer         TaskSyncer
-	syncSecretFile string
-	list           tasklist.Model
-	add            taskform.Model
-	adding         bool
-	deleting       bool
-	purging        bool
-	completing     bool
-	restoring      bool
-	renaming       bool
-	renameInput    addform.Model
-	renameFrom     string
-	renameTo       string
-	renameMerging  bool
-	renameConfirm  bool
-	datePicking    bool
-	datePick       datepick.Model
-	pickingProject bool
-	projectPicker  projects.Model
-	reassigning    bool
-	reassignPicker projects.Model
-	reassignTyping bool
-	reassignInput  addform.Model
-	searching      bool
-	searchInput    textinput.Model
-	searchScope    searchScope
-	popups         popup.Model
-	quitting       bool
-	pendingFocusID int
-	focus          panelFocus
-	width          int
-	height         int
-	projects       projects.Model
-	filter         filterState
-	knownProjects  map[string]struct{}
-	tags           tags.Model
-	knownTags      map[string]struct{}
-	undo           undo.Stack
+	reader           TaskReader
+	adder            TaskAdder
+	doner            TaskDoner
+	deleter          TaskDeleter
+	restorer         TaskRestorer
+	purger           TaskPurger
+	importer         TaskImporter
+	prioritizer      TaskPrioritizer
+	reranker         TaskReRanker
+	duer             TaskDueSetter
+	projecter        TaskProjectSetter
+	annotator        TaskAnnotator
+	syncer           TaskSyncer
+	syncSecretFile   string
+	autoSyncInterval time.Duration
+	lastAutoSyncErr  error
+	mutationSyncGen  int
+	list             tasklist.Model
+	add              taskform.Model
+	adding           bool
+	deleting         bool
+	purging          bool
+	completing       bool
+	restoring        bool
+	renaming         bool
+	renameInput      addform.Model
+	renameFrom       string
+	renameTo         string
+	renameMerging    bool
+	renameConfirm    bool
+	datePicking      bool
+	datePick         datepick.Model
+	pickingProject   bool
+	projectPicker    projects.Model
+	reassigning      bool
+	reassignPicker   projects.Model
+	reassignTyping   bool
+	reassignInput    addform.Model
+	searching        bool
+	searchInput      textinput.Model
+	searchScope      searchScope
+	popups           popup.Model
+	quitting         bool
+	pendingFocusID   int
+	focus            panelFocus
+	width            int
+	height           int
+	projects         projects.Model
+	filter           filterState
+	knownProjects    map[string]struct{}
+	tags             tags.Model
+	knownTags        map[string]struct{}
+	undo             undo.Stack
 }
 
 // initialModel constructs the app's starting state, including restoring
@@ -608,6 +652,7 @@ func initialModel() model {
 	// it's never applied here, since it must never be persisted to
 	// Taskwarrior's own .taskrc.
 	var syncSecretFile string
+	autoSyncInterval := time.Duration(config.DefaultAutoSyncIntervalMinutes) * time.Minute
 	if syncCfg, err := config.LoadGitSyncConfig(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not load git-sync config: %v\n", err)
 	} else {
@@ -622,34 +667,36 @@ func initialModel() model {
 		}
 		cancel()
 		syncSecretFile = syncCfg.EncryptionSecretFile
+		autoSyncInterval = syncCfg.AutoSyncInterval()
 	}
 
 	persisted := config.Load()
 	return model{
-		reader:         client,
-		adder:          client,
-		doner:          client,
-		deleter:        client,
-		restorer:       client,
-		purger:         client,
-		importer:       client,
-		prioritizer:    client,
-		reranker:       client,
-		duer:           client,
-		projecter:      client,
-		annotator:      client,
-		syncer:         client,
-		syncSecretFile: syncSecretFile,
-		list:           tasklist.New(nil).SetFocused(true),
-		add:            taskform.New(),
-		datePick:       datepick.New(),
-		projects:       projects.New(),
-		projectPicker:  projects.New(),
-		reassignPicker: projects.New(),
-		knownProjects:  make(map[string]struct{}),
-		tags:           tags.New(),
-		knownTags:      make(map[string]struct{}),
-		filter:         filterState{project: persisted.Project, tag: persisted.Tag},
+		reader:           client,
+		adder:            client,
+		doner:            client,
+		deleter:          client,
+		restorer:         client,
+		purger:           client,
+		importer:         client,
+		prioritizer:      client,
+		reranker:         client,
+		duer:             client,
+		projecter:        client,
+		annotator:        client,
+		syncer:           client,
+		syncSecretFile:   syncSecretFile,
+		autoSyncInterval: autoSyncInterval,
+		list:             tasklist.New(nil).SetFocused(true),
+		add:              taskform.New(),
+		datePick:         datepick.New(),
+		projects:         projects.New(),
+		projectPicker:    projects.New(),
+		reassignPicker:   projects.New(),
+		knownProjects:    make(map[string]struct{}),
+		tags:             tags.New(),
+		knownTags:        make(map[string]struct{}),
+		filter:           filterState{project: persisted.Project, tag: persisted.Tag},
 	}
 }
 
@@ -1285,6 +1332,53 @@ func runSync(syncer TaskSyncer, secretFile string) tea.Cmd {
 	}
 }
 
+// autoSyncTick returns a tea.Cmd that fires an autoSyncTickMsg once
+// interval elapses, driving the periodic background auto-sync timer (see
+// requirements.md's auto-sync section). Callers reschedule the next tick
+// themselves after handling autoSyncTickMsg, since tea.Tick is one-shot.
+func autoSyncTick(interval time.Duration) tea.Cmd {
+	return tea.Tick(interval, func(time.Time) tea.Msg {
+		return autoSyncTickMsg{}
+	})
+}
+
+// runAutoSync returns a tea.Cmd that silently runs `task sync` in the
+// background, mirroring runSync's secret resolution but reporting the
+// outcome via autoSyncedMsg/autoSyncErrMsg instead of
+// taskSyncedMsg/taskSyncErrMsg — see those types' docs for why: the
+// manual "S" path's popups must stay unchanged, while this quiet path
+// never shows a success popup and reports failure via the status line
+// only.
+func runAutoSync(syncer TaskSyncer, secretFile string) tea.Cmd {
+	return func() tea.Msg {
+		secret, err := config.EnsureSyncSecret(secretFile)
+		if err != nil {
+			return autoSyncErrMsg{err: fmt.Errorf("preparing sync secret: %w", err)}
+		}
+		if err := syncer.Sync(context.Background(), secret); err != nil {
+			return autoSyncErrMsg{err: err}
+		}
+		return autoSyncedMsg{}
+	}
+}
+
+// scheduleMutationAutoSync bumps the model's mutation-sync generation and
+// returns a tea.Cmd that schedules a debounced on-mutation auto-sync (see
+// requirements.md's auto-sync section and mutationSyncDebounceMsg). Call
+// this from every local mutation-success case (add, done, delete,
+// restore, purge, priority, due, project, reorder, edit) except
+// undo/redo, which are deliberately sync-exempt — the periodic timer will
+// eventually pick up whatever state the user leaves after an undo/redo.
+// Returns nil if no syncer is configured, since there's nothing to
+// schedule.
+func (m *model) scheduleMutationAutoSync() tea.Cmd {
+	if m.syncer == nil {
+		return nil
+	}
+	m.mutationSyncGen++
+	return scheduleMutationSync(m.mutationSyncGen)
+}
+
 // editTask opens task in the user's $EDITOR as a structured plain-text
 // buffer (see internal/editbuffer), similar in spirit to `task <id> edit`,
 // then re-imports the edited fields via importer once the editor exits. It
@@ -1396,7 +1490,15 @@ func renameProject(reader TaskReader, importer TaskImporter, from, to string) te
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+	cmds := []tea.Cmd{
+		fetchTasks(m.reader, m.taskFilters()...),
+		fetchProjects(m.reader),
+		fetchTags(m.reader, m.filter.projectOnlyFilter()),
+	}
+	if m.syncer != nil && m.autoSyncInterval > 0 {
+		cmds = append(cmds, autoSyncTick(m.autoSyncInterval))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1732,59 +1834,59 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskAddedMsg:
 		m.add = m.add.Reset()
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskAddErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskDoneErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskRestoredMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskRestoreErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPurgedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPrioritySetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskPriorityErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDueSetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskDueErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskProjectSetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskProjectErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskReorderedMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, fetchTasks(m.reader, m.taskFilters()...)
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), m.scheduleMutationAutoSync())
 	case taskReorderErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -1806,9 +1908,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskSyncErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
+	case autoSyncTickMsg:
+		// Reschedule the next tick alongside kicking off this run so the
+		// timer keeps going even if this run errors — periodic auto-sync
+		// is best-effort and should keep retrying on its own schedule.
+		cmds := []tea.Cmd{autoSyncTick(m.autoSyncInterval)}
+		if m.syncer != nil {
+			cmds = append(cmds, runAutoSync(m.syncer, m.syncSecretFile))
+		}
+		return m, tea.Batch(cmds...)
+	case autoSyncedMsg:
+		m.lastAutoSyncErr = nil
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+	case autoSyncErrMsg:
+		m.lastAutoSyncErr = msg.err
+		return m, nil
+	case mutationSyncDebounceMsg:
+		// A newer mutation may have superseded this timer (bumping
+		// m.mutationSyncGen past msg.gen); if so, this fire is stale and
+		// should be a no-op — the newer mutation's own timer will run the
+		// sync once its quiet period elapses.
+		if msg.gen != m.mutationSyncGen || m.syncer == nil {
+			return m, nil
+		}
+		return m, runAutoSync(m.syncer, m.syncSecretFile)
 	case taskEditedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskEditErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -2370,6 +2496,12 @@ func (m model) screenDims() (width, height int) {
 	return width, height
 }
 
+// autoSyncErrStyle renders the quiet status-line auto-sync failure
+// indicator (see autoSyncErrMsg): a dim warning appended after the normal
+// key-hint bar, deliberately less prominent than the popup shown for a
+// manually-triggered "S" sync failure.
+var autoSyncErrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+
 // baseView renders the grid plus whatever status line/prompt belongs
 // underneath it, ignoring the adding/popup overlays layered on top by
 // View(). This is the "background" the add-task box and any popup are
@@ -2383,7 +2515,11 @@ func (m model) baseView() string {
 	if m.searching {
 		view += "\n" + m.searchInput.View() + "\n"
 	} else {
-		view += "\n" + statusbar.Render(m.statusBindings()) + "\n"
+		line := statusbar.Render(m.statusBindings())
+		if m.lastAutoSyncErr != nil {
+			line += "  " + autoSyncErrStyle.Render(fmt.Sprintf("⚠ auto-sync failed: %v", m.lastAutoSyncErr))
+		}
+		view += "\n" + line + "\n"
 	}
 	return view
 }

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -64,7 +65,19 @@ type GitSyncConfig struct {
 	// deliberately excludes. Supports a leading "~/" for the home
 	// directory. Empty means "use the default path".
 	EncryptionSecretFile string `yaml:"encryption_secret_file"`
+
+	// AutoSyncIntervalMinutes controls how often lazytask runs `task
+	// sync` on its own, in the background, while the app is open (see
+	// requirements.md's auto-sync section). Zero/unset falls back to
+	// DefaultAutoSyncIntervalMinutes — there is currently no supported way
+	// to disable the periodic timer via this field.
+	AutoSyncIntervalMinutes int `yaml:"auto_sync_interval_minutes"`
 }
+
+// DefaultAutoSyncIntervalMinutes is the periodic auto-sync interval used
+// when sync.git.auto_sync_interval_minutes is left unset (zero) in the
+// user's YAML config.
+const DefaultAutoSyncIntervalMinutes = 5
 
 // appConfig mirrors the on-disk YAML shape:
 //
@@ -74,6 +87,7 @@ type GitSyncConfig struct {
 //	    branch: main
 //	    remote: git@github.com:me/tasks-sync.git
 //	    encryption_secret_file: ~/.secrets/lazytask-sync-secret
+//	    auto_sync_interval_minutes: 5
 type appConfig struct {
 	Sync struct {
 		Git GitSyncConfig `yaml:"git"`
@@ -176,6 +190,17 @@ func LoadGitSyncConfig() (GitSyncConfig, error) {
 	}
 
 	return cfg.Sync.Git, nil
+}
+
+// AutoSyncInterval returns the effective periodic auto-sync interval for
+// this GitSyncConfig, applying DefaultAutoSyncIntervalMinutes when
+// AutoSyncIntervalMinutes is unset (zero).
+func (c GitSyncConfig) AutoSyncInterval() time.Duration {
+	minutes := c.AutoSyncIntervalMinutes
+	if minutes <= 0 {
+		minutes = DefaultAutoSyncIntervalMinutes
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 // defaultSyncSecretRelPath is where the auto-managed git-sync encryption
