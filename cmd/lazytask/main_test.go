@@ -190,6 +190,20 @@ func (s *stubAnnotator) Annotate(ctx context.Context, id, text string) error {
 	return s.err
 }
 
+// stubSyncer is a test double for TaskSyncer, avoiding any real `task`
+// process invocation.
+type stubSyncer struct {
+	err     error
+	call    int
+	secrets []string
+}
+
+func (s *stubSyncer) Sync(ctx context.Context, secret string) error {
+	s.call++
+	s.secrets = append(s.secrets, secret)
+	return s.err
+}
+
 // runBatch executes cmd, and if it returns a tea.BatchMsg (e.g. from
 // refreshes that now fetch tasks and projects concurrently via
 // tea.Batch), executes each of the batched sub-commands as well,

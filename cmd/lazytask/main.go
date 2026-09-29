@@ -137,6 +137,7 @@ var globalBindings = []statusbar.Binding{
 	{Key: "a", Label: "add"},
 	{Key: "u", Label: "undo"},
 	{Key: "ctrl+r", Label: "redo"},
+	{Key: "S", Label: "sync"},
 	{Key: "q", Label: "quit"},
 }
 
@@ -301,6 +302,13 @@ type TaskProjectSetter interface {
 // shelling out to the real `task` binary.
 type TaskAnnotator interface {
 	Annotate(ctx context.Context, id, text string) error
+}
+
+// TaskSyncer is the subset of the taskwarrior client needed to trigger a
+// `task sync` run, so it can be stubbed out in tests without shelling out
+// to the real `task` binary.
+type TaskSyncer interface {
+	Sync(ctx context.Context, secret string) error
 }
 
 // tasksLoadedMsg carries the result of a successful task fetch.
@@ -512,6 +520,16 @@ type filterSaveErrMsg struct {
 	err error
 }
 
+// taskSyncedMsg indicates a manually-triggered `task sync` (see the "S"
+// key binding) completed successfully.
+type taskSyncedMsg struct{}
+
+// taskSyncErrMsg carries the error from a failed `task sync` run,
+// including the common case where no sync backend is configured at all.
+type taskSyncErrMsg struct {
+	err error
+}
+
 type model struct {
 	reader         TaskReader
 	adder          TaskAdder
@@ -525,6 +543,8 @@ type model struct {
 	duer           TaskDueSetter
 	projecter      TaskProjectSetter
 	annotator      TaskAnnotator
+	syncer         TaskSyncer
+	syncSecretFile string
 	list           tasklist.Model
 	add            taskform.Model
 	adding         bool
@@ -578,6 +598,32 @@ func initialModel() model {
 		fmt.Fprintf(os.Stderr, "Warning: could not register urgencyoffset UDA: %v\n", err)
 	}
 	cancel()
+
+	// Best-effort, idempotent: applies any sync.git.* settings from
+	// lazytask's own YAML config file (see internal/config.LoadGitSyncConfig)
+	// to Taskwarrior. Absent or empty fields are simply skipped, so this is
+	// a no-op until the user opts in by writing a config file. A failure
+	// here doesn't block startup — git-sync just won't be configured. The
+	// encryption secret is handled separately (see syncSecretFile below):
+	// it's never applied here, since it must never be persisted to
+	// Taskwarrior's own .taskrc.
+	var syncSecretFile string
+	if syncCfg, err := config.LoadGitSyncConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not load git-sync config: %v\n", err)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		gitCfg := taskwarrior.GitSyncConfig{
+			LocalPath: syncCfg.LocalPath,
+			Branch:    syncCfg.Branch,
+			Remote:    syncCfg.Remote,
+		}
+		if err := client.ApplyGitSyncConfig(ctx, gitCfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not apply git-sync config: %v\n", err)
+		}
+		cancel()
+		syncSecretFile = syncCfg.EncryptionSecretFile
+	}
+
 	persisted := config.Load()
 	return model{
 		reader:         client,
@@ -592,6 +638,8 @@ func initialModel() model {
 		duer:           client,
 		projecter:      client,
 		annotator:      client,
+		syncer:         client,
+		syncSecretFile: syncSecretFile,
 		list:           tasklist.New(nil).SetFocused(true),
 		add:            taskform.New(),
 		datePick:       datepick.New(),
@@ -1215,6 +1263,28 @@ func runRedo(a undo.Action) tea.Cmd {
 	}
 }
 
+// runSync returns a tea.Cmd that triggers a manual `task sync` run (see
+// the "S" key binding in Update). secretFile is passed through to
+// config.EnsureSyncSecret to resolve (generating on first use, if needed)
+// the git-sync encryption secret; an empty string means "use the default
+// path". This is deliberately synchronous from the user's point of view
+// (Bubble Tea runs the returned func off the UI goroutine, but the app
+// blocks on its result) since a sync round-trip to a remote is expected
+// to take longer than an ordinary mutation and the user should see it
+// hasn't silently failed.
+func runSync(syncer TaskSyncer, secretFile string) tea.Cmd {
+	return func() tea.Msg {
+		secret, err := config.EnsureSyncSecret(secretFile)
+		if err != nil {
+			return taskSyncErrMsg{err: fmt.Errorf("preparing sync secret: %w", err)}
+		}
+		if err := syncer.Sync(context.Background(), secret); err != nil {
+			return taskSyncErrMsg{err: err}
+		}
+		return taskSyncedMsg{}
+	}
+}
+
 // editTask opens task in the user's $EDITOR as a structured plain-text
 // buffer (see internal/editbuffer), similar in spirit to `task <id> edit`,
 // then re-imports the edited fields via importer once the editor exits. It
@@ -1433,6 +1503,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, runRedo(act)
+		case "S":
+			if m.syncer == nil {
+				return m, nil
+			}
+			return m, runSync(m.syncer, m.syncSecretFile)
 		}
 		// Projects-panel-local: navigation (up/down/j/k) is applied
 		// directly here, rather than being delegated to the bottom
@@ -1723,6 +1798,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Redo: " + msg.description})
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
 	case redoErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskSyncedMsg:
+		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Sync complete"})
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+	case taskSyncErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskEditedMsg:

@@ -119,6 +119,46 @@ than a human would spend minutes:
   plaintext task data. The intended remote is a **private** git repo, but
   encryption + a history purge (below) are extra defense-in-depth layers in
   case that repo is ever exposed.
+
+  **Status: chunks 1–3 complete (uncommitted, awaiting sign-off); history
+  purge routine below not started.**
+
+  - ✅ **Chunk 1 — Sync config plumbing.** `internal/config.GitSyncConfig` +
+    `LoadGitSyncConfig()` read `sync.git.*` from a fixed, hand-editable
+    `~/.config/lazytask/config.yaml` (same path on every OS, incl. Arch
+    Linux — deliberately not `os.UserConfigDir()`'s per-OS convention).
+    `taskwarrior.Client.ApplyGitSyncConfig` idempotently writes those keys
+    via `task config`, mirroring the existing `EnsureUDA` pattern. Wired
+    into app startup in `cmd/lazytask/main.go`, best-effort with stderr
+    warnings on failure.
+  - ✅ **Chunk 2 — Manual sync trigger.** Global `S` keybinding runs
+    `task sync` (`Client.Sync`). Taskwarrior's raw sync stderr is noisy
+    (`TASKRC override:`, etc.) and the "no backend configured" case is
+    common, so `cleanSyncStderr()` strips the noise and a plain-English
+    message is substituted for that specific case, pointing at
+    `sync.git.*` / `task-sync(5)`.
+  - ✅ **Chunk 3 — Auto-managed, configurable encryption secret.** The
+    secret is **never** written to Taskwarrior's own `.taskrc` — only
+    passed as a one-off `rc.sync.encryption_secret=` override at `task
+    sync` time (verified via integration test). `config.EnsureSyncSecret`
+    auto-generates one (32 random bytes, hex, `crypto/rand`) on first use
+    and persists it at `~/.local/share/lazytask/sync-secret` (0600,
+    deliberately outside `~/.config` so a dotfile manager tracking
+    `config.yaml` won't sweep it up) unless overridden via `config.yaml`'s
+    `sync.git.encryption_secret_file` (a *path*, safe to dotfile-manage,
+    since it holds no secret material).
+  - ✅ **Bugfix — `local_path` tilde expansion.** Taskwarrior's own `~`
+    expansion of `sync.git.local_path` was observed to misresolve on
+    macOS (`~/foo` → `/home//foo`, a bogus automount path), causing a
+    cryptic "Operation not supported (os error 45)" sync failure. Fixed
+    by having lazytask expand a leading `~/` itself (via
+    `os.UserHomeDir()`, pure Go stdlib — platform-agnostic, including
+    Linux/Arch) before ever handing the path to `task config`. Covered by
+    `TestLoadGitSyncConfig_LocalPathTildeExpansion`.
+  - **Not yet done:** dedicated CLI subcommand for manually
+    creating/rotating the secret (discussed, not built — currently only
+    auto-created on first `S`-triggered sync); the history purge routine
+    below.
   - **History retention/purge** — TaskChampion's built-in version-file
     cleanup only prunes already-snapshotted files and defaults to a
     hardcoded 180-day retention (not configurable via `task config`); it

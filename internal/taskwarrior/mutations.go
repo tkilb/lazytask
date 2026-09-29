@@ -23,6 +23,7 @@ type TaskMutator interface {
 	SetDue(ctx context.Context, id, due string) error
 	SetProject(ctx context.Context, id, project string) error
 	Annotate(ctx context.Context, id, text string) error
+	Sync(ctx context.Context, secret string) error
 }
 
 // createdTaskRE matches Taskwarrior's "Created task <id>." confirmation line.
