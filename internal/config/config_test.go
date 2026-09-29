@@ -212,3 +212,44 @@ func TestEnsureSyncSecret_ExistingFileIsReturnedVerbatim(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "preexisting-secret", secret)
 }
+
+func TestRotateSyncSecret_OverwritesExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secret")
+	require.NoError(t, os.WriteFile(path, []byte("preexisting-secret\n"), 0o600))
+
+	rotated, err := RotateSyncSecret(path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, rotated)
+	assert.NotEqual(t, "preexisting-secret", rotated)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, rotated, strings.TrimSpace(string(data)))
+}
+
+func TestRotateSyncSecret_CreatesWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "secret")
+
+	rotated, err := RotateSyncSecret(path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, rotated)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestSyncSecretPath_DefaultAndOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	defaultPath, err := SyncSecretPath("")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, defaultSyncSecretRelPath), defaultPath)
+
+	overridePath, err := SyncSecretPath("~/custom/secret-file")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "custom", "secret-file"), overridePath)
+}

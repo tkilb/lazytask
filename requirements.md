@@ -120,8 +120,8 @@ than a human would spend minutes:
   encryption + a history purge (below) are extra defense-in-depth layers in
   case that repo is ever exposed.
 
-  **Status: chunks 1–3 complete (uncommitted, awaiting sign-off); history
-  purge routine below not started.**
+  **Status: chunks 1–3 committed; chunk 4 complete (uncommitted, awaiting
+  sign-off); history purge routine below not started.**
 
   - ✅ **Chunk 1 — Sync config plumbing.** `internal/config.GitSyncConfig` +
     `LoadGitSyncConfig()` read `sync.git.*` from a fixed, hand-editable
@@ -155,10 +155,16 @@ than a human would spend minutes:
     `os.UserHomeDir()`, pure Go stdlib — platform-agnostic, including
     Linux/Arch) before ever handing the path to `task config`. Covered by
     `TestLoadGitSyncConfig_LocalPathTildeExpansion`.
-  - **Not yet done:** dedicated CLI subcommand for manually
-    creating/rotating the secret (discussed, not built — currently only
-    auto-created on first `S`-triggered sync); the history purge routine
-    below.
+  - ✅ **Chunk 4 — Sync secret CLI subcommand.** `lazytask sync-secret`
+    ensures the encryption secret exists (creating it via the same
+    `config.EnsureSyncSecret` path used by the first `S`-triggered sync)
+    and prints its on-disk path (never the secret value itself).
+    `lazytask sync-secret rotate` unconditionally regenerates it via the
+    new `config.RotateSyncSecret`, after printing a warning that rotation
+    permanently invalidates decryption of any history already pushed
+    under the old secret and requires updating every other device sharing
+    the sync repo.
+  - **Not yet done:** the history purge routine below.
   - **History retention/purge** — TaskChampion's built-in version-file
     cleanup only prunes already-snapshotted files and defaults to a
     hardcoded 180-day retention (not configurable via `task config`); it

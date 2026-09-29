@@ -224,6 +224,42 @@ func EnsureSyncSecret(path string) (string, error) {
 	return secret, nil
 }
 
+// RotateSyncSecret generates a brand-new secret and overwrites whatever is
+// currently stored at path (see EnsureSyncSecret for path resolution),
+// unconditionally — unlike EnsureSyncSecret, it does not reuse an existing
+// secret. Callers must warn users that rotating invalidates the ability to
+// decrypt any history already pushed to the sync remote under the old
+// secret, and that every other device sharing this sync repo needs to be
+// updated with the new secret too.
+func RotateSyncSecret(path string) (string, error) {
+	resolved, err := resolveSyncSecretPath(path)
+	if err != nil {
+		return "", err
+	}
+
+	secret, err := generateSyncSecret()
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o700); err != nil {
+		return "", fmt.Errorf("creating sync secret dir: %w", err)
+	}
+	if err := os.WriteFile(resolved, []byte(secret+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("writing sync secret file %s: %w", resolved, err)
+	}
+	return secret, nil
+}
+
+// SyncSecretPath returns the resolved on-disk path of the git-sync
+// encryption secret for the given GitSyncConfig.EncryptionSecretFile
+// override (empty meaning "use the default path"), without reading or
+// creating it. Useful for CLI output that shouldn't print the secret
+// itself, only where it lives.
+func SyncSecretPath(path string) (string, error) {
+	return resolveSyncSecretPath(path)
+}
+
 // resolveSyncSecretPath expands a leading "~/" and falls back to
 // defaultSyncSecretRelPath under the home directory when path is empty.
 func resolveSyncSecretPath(path string) (string, error) {

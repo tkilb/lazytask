@@ -2631,6 +2631,14 @@ func main() {
 		return
 	}
 
+	if isSyncSecretArg(os.Args[1:]) {
+		if err := runSyncSecret(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error managing sync secret: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Use the alternate screen so the program owns the full terminal
 	// buffer. Without it, resuming after an external process (e.g. the
 	// editor launched by the 'e' key, via tea.ExecProcess) just repaints
