@@ -17,6 +17,7 @@ import (
 	"github.com/tkilb/lazytask/internal/editor"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/datepick"
+	"github.com/tkilb/lazytask/internal/ui/helppopup"
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/tags"
@@ -409,47 +410,40 @@ func TestModelView(t *testing.T) {
 		assert.Contains(t, m.View(), "Error")
 	})
 
-	t.Run("shows Tasks-local hints when Tasks panel is focused", func(t *testing.T) {
+	t.Run("status bar shows only nav hints for Tasks panel, rest live in '?' popup", func(t *testing.T) {
 		m := model{list: tasklist.New(nil)} // zero-value focus == focusTasks
 		view := m.View()
-		for _, want := range []string{"a", "add", "d", "done", "x", "delete", "e", "edit", "q", "quit"} {
+		for _, want := range []string{"a", "add", "q", "quit", "?", "help", "up", "down"} {
 			assert.Contains(t, view, want)
 		}
-		assert.NotContains(t, view, "refresh")
-	})
-
-	t.Run("hides Tasks-local hints when another panel is focused", func(t *testing.T) {
-		m := model{list: tasklist.New(nil), focus: focusStatus}
-		view := m.View()
-		assert.Contains(t, view, "quit")
-		assert.Contains(t, view, "add")
+		// "done"/"delete"/"edit" were trimmed from the always-visible
+		// status bar (moved to the "?" popup only) per the 2026-09-30
+		// help-popup design; "refresh" was never a real keybinding.
 		for _, notWant := range []string{"done", "delete", "edit", "refresh"} {
 			assert.NotContains(t, view, notWant)
 		}
 	})
 
-	t.Run("hides reopen hint on Todo tab", func(t *testing.T) {
-		m := model{list: tasklist.New(nil)} // zero-value status == TabTodo
-		assert.NotContains(t, m.View(), "reopen")
-	})
-
-	t.Run("shows reopen hint on Done tab", func(t *testing.T) {
-		m := model{list: tasklist.New(nil).NextStatus()} // Todo -> Done
-		assert.Contains(t, m.View(), "reopen")
-	})
-
-	t.Run("hides done hint on Done tab", func(t *testing.T) {
-		m := model{list: tasklist.New(nil).NextStatus()} // Todo -> Done
+	t.Run("hides Tasks-local nav hints when another panel is focused", func(t *testing.T) {
+		m := model{list: tasklist.New(nil), focus: focusStatus}
 		view := m.View()
-		assert.NotContains(t, view, "done")
+		assert.Contains(t, view, "quit")
+		assert.Contains(t, view, "add")
+		for _, notWant := range []string{"up", "down", "done", "delete", "edit", "refresh"} {
+			assert.NotContains(t, view, notWant)
+		}
 	})
 
-	t.Run("shows restore hint (not reopen) and purge hint (not delete) on Deleted tab", func(t *testing.T) {
-		m := model{list: tasklist.New(nil).NextStatus().NextStatus()} // Todo -> Done -> Deleted
-		view := m.View()
-		assert.Contains(t, view, "restore")
-		assert.NotContains(t, view, "reopen")
-		assert.Contains(t, view, "purge")
+	t.Run("status bar no longer varies by Tasks tab (tab-specific hints live in '?' popup only)", func(t *testing.T) {
+		todo := model{list: tasklist.New(nil)}
+		done := model{list: tasklist.New(nil).NextStatus()}
+		deleted := model{list: tasklist.New(nil).NextStatus().NextStatus()}
+		for _, m := range []model{todo, done, deleted} {
+			view := m.View()
+			for _, notWant := range []string{"reopen", "restore", "purge"} {
+				assert.NotContains(t, view, notWant)
+			}
+		}
 	})
 
 	t.Run("shows delete confirmation prompt on Todo tab (with id)", func(t *testing.T) {
@@ -2985,4 +2979,124 @@ func TestSaveFilter_PersistsProjectSelection(t *testing.T) {
 	got := config.Load()
 	require.NotNil(t, got.Project)
 	assert.Equal(t, "home", *got.Project)
+}
+
+// TestModelUpdate_QuestionMarkOpensHelp verifies "?" opens the keyboard
+// shortcuts help popup when no other modal is active.
+func TestModelUpdate_QuestionMarkOpensHelp(t *testing.T) {
+	m := model{list: tasklist.New(nil)}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	got := updated.(model)
+	assert.True(t, got.showingHelp)
+	assert.Nil(t, cmd)
+}
+
+// TestModelUpdate_HelpEscOrQuestionMarkCloses verifies esc or "?" dismiss
+// the help popup once open, resetting scroll back to the top; other keys
+// (besides the scroll keys, tested separately) are ignored rather than
+// closing it, since up/down/j/k are reserved for scrolling.
+func TestModelUpdate_HelpEscOrQuestionMarkCloses(t *testing.T) {
+	m := model{list: tasklist.New(nil), showingHelp: true, helpScroll: 3}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got := updated.(model)
+	assert.False(t, got.showingHelp)
+	assert.Zero(t, got.helpScroll)
+	assert.Nil(t, cmd)
+
+	m = model{list: tasklist.New(nil), showingHelp: true}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	assert.False(t, updated.(model).showingHelp)
+}
+
+// TestModelUpdate_HelpUnrelatedKeyIsNoOp verifies a key that's neither a
+// scroll key nor a close key (e.g. "x") is ignored while help is open,
+// rather than closing it or doing anything else.
+func TestModelUpdate_HelpUnrelatedKeyIsNoOp(t *testing.T) {
+	m := model{list: tasklist.New(nil), showingHelp: true}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	assert.True(t, updated.(model).showingHelp)
+}
+
+// TestModelUpdate_HelpScrollKeysMoveWithinBounds verifies down/j scroll
+// forward (clamped at helppopup.MaxScroll) and up/k scroll back (clamped
+// at 0), so the reference can be scrolled without accidentally closing it.
+func TestModelUpdate_HelpScrollKeysMoveWithinBounds(t *testing.T) {
+	// height:20 keeps the popup's viewport (VisibleRows) small enough
+	// that the default model's ~25-line reference overflows and needs
+	// scrolling, regardless of VisibleRows' exact height-scaling.
+	m := model{list: tasklist.New(nil), showingHelp: true, height: 20}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	got := updated.(model)
+	assert.Equal(t, 1, got.helpScroll)
+	assert.True(t, got.showingHelp)
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyUp})
+	got = updated.(model)
+	assert.Equal(t, 0, got.helpScroll)
+
+	// Can't scroll above 0.
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyUp})
+	assert.Equal(t, 0, updated.(model).helpScroll)
+
+	maxScroll := helppopup.MaxScroll(got.helpSections(), got.height)
+	got.helpScroll = maxScroll
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyDown})
+	assert.Equal(t, maxScroll, updated.(model).helpScroll, "can't scroll past MaxScroll")
+}
+
+// TestModelUpdate_QuestionMarkDoesNotOpenHelpDuringTextInput verifies "?"
+// is captured as a literal character (not intercepted as the help
+// shortcut) while a text-input modal (e.g. the Add Task form) is active,
+// per the decided design: "?" only opens help when no such modal is
+// capturing keystrokes.
+func TestModelUpdate_QuestionMarkDoesNotOpenHelpDuringTextInput(t *testing.T) {
+	m := model{list: tasklist.New(nil), adding: true, add: taskform.New().Focus()}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	got := updated.(model)
+	assert.False(t, got.showingHelp)
+	assert.True(t, got.adding)
+}
+
+// TestModelView_ShowingHelpRendersReference verifies the help popup's
+// content (title-in-border + Local/Global/Navigation sections/bindings)
+// appears in View() when showingHelp is set. The default model focuses
+// Tasks on the Todo tab, so Local/Global/Navigation sections are all
+// expected; scroll to the bottom first since the popup is a fixed-height
+// viewport that doesn't show every section on one screen.
+func TestModelView_ShowingHelpRendersReference(t *testing.T) {
+	m := model{list: tasklist.New(nil), showingHelp: true, width: 100, height: 40}
+	m.helpScroll = helppopup.MaxScroll(m.helpSections(), m.height)
+	view := m.View()
+	assert.Contains(t, view, "Keybindings")
+	assert.Contains(t, view, "Global")
+	assert.Contains(t, view, "Navigation")
+}
+
+// TestHelpSections_CoversTrimmedStatusBarKeys verifies every keybinding
+// that was trimmed out of the always-visible status bar (per the
+// 2026-09-30 "?" popup design) is still documented somewhere in
+// helpSections for some reachable focus/tab combination, so trimming the
+// status bar never silently loses discoverability of a real, working key.
+func TestHelpSections_CoversTrimmedStatusBarKeys(t *testing.T) {
+	trimmedKeys := []string{"[/]", "d", "x", "e", "h/m/l", "D", "p", "ctrl+j/k", "/", "n/N", "r", "R", "X"}
+
+	models := []model{
+		{list: tasklist.New(nil), focus: focusTasks},                           // Todo tab
+		{list: tasklist.New(nil).NextStatus(), focus: focusTasks},              // Done tab
+		{list: tasklist.New(nil).NextStatus().NextStatus(), focus: focusTasks}, // Deleted tab
+		{list: tasklist.New(nil), focus: focusProjects},
+	}
+
+	documented := map[string]bool{}
+	for _, m := range models {
+		for _, sec := range m.helpSections() {
+			for _, b := range sec.Bindings {
+				documented[b.Key] = true
+			}
+		}
+	}
+	for _, key := range trimmedKeys {
+		assert.True(t, documented[key], "expected helpSections to document trimmed key %q across reachable focus/tab states", key)
+	}
 }

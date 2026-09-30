@@ -510,10 +510,167 @@ shipped). Human requested this instead run automatically so devices that
     3. *(Not needed — chunks 1+2 together stayed within the bounded
        diff-size rule in Section 6; "Purge all" is now fully implemented.)*
 - [ ] **Keyboard hints popup via `?`** — a help overlay listing current key
-      bindings.
-      lets have a conversation of which keys show and which must be referenced via the help popup
-
-Discussion for this:
+      bindings. **Scope decided 2026-09-30 (human sign-off):** status bar
+      keeps a short always-visible "core" set (`0-4/tab`, `a`, `u`,
+      `ctrl+r`, `S`, `?`, `q`, plus per-panel `↑/k`/`↓/j` nav only); every
+      other real, working keybinding (tabs `[`/`]`, `d`, `x`/purge, `X`
+      purge-all, `r` reopen/restore, `e`, `h/m/l` priority, `D` due date,
+      `p` project filter, `ctrl+j/k` reorder, `/`/`n`/`N` search on both
+      Tasks and Projects panels, `R` rename) is documented only in the `?`
+      popup, grouped by panel section, as a static always-fully-populated
+      reference (not filtered live by current tab, unlike the status
+      bar — tab-specific behavior is called out in the label text
+      instead, e.g. "delete (Todo/Done) / purge (Deleted)"). `?` only
+      triggers the popup when no other modal/text-input is capturing
+      keystrokes (so it still types as a literal `?` inside the Add Task
+      form, search box, rename/reassign popups, etc.); any keypress
+      dismisses the popup once open (pure reference, no confirm/cancel
+      distinction).
+      - ✅ **Implementation (done, uncommitted)** — new
+        `internal/ui/helppopup` package (`Section`/`Box`, styled like the
+        other popups with `panel.FocusedColor`-equivalent green border);
+        `model.showingHelp` + `updateShowingHelp` wired the same way as
+        every other modal short-circuit in `Update`; `helpSections()` in
+        `cmd/lazytask/main.go` is the single source of truth for the full
+        reference; `globalBindings`/`tasksLocalBindings`/
+        `projectsLocalBindings` trimmed to the decided "core" set.
+        **Diff-size note:** came out to ~450 changed/added lines across 5
+        files (new package + tests, `main.go`, `main_test.go`,
+        `bulkpurge_test.go`) — over Section 6's ~150–250 line target,
+        though within the 4–6 file guideline. Flagging per Section 6's
+        hard-stop rule rather than silently exceeding it; splitting
+        further after the fact would mean re-doing completed, tested
+        work, so reporting as one chunk for human review/split decision
+        rather than proceeding to anything else. `go build ./...` and
+        `go test ./...` both pass.
+      - ✅ **Fine-tune, 2026-09-30 — scrolling + real palette color
+        (uncommitted).** Two follow-up tweaks after initial review: (1)
+        **Color bug fix** — the popup's border/title had actually used an
+        arbitrary 256-color literal (`"42"`) rather than reusing
+        `panel.FocusedColor` (lazygit's real default `activeBorderColor`,
+        ANSI green `"2"`) the way `datepick`/`addform` already do; fixed
+        to import and use `panel.FocusedColor` directly, restoring
+        consistency with the rest of the app's lazygit-matched palette
+        (per `panel.go`'s documented color roles) rather than the user
+        having to eyeball colors against their own terminal theme. (2)
+        **Scrolling** — the reference (35 lines across 4 sections) no
+        longer fits in one screen; `helppopup.Box` now takes a
+        `scrollOffset` and renders a fixed `maxVisibleRows` (14) viewport
+        window plus a "N-M/total ↑/↓ scroll" footer hint, with
+        `helppopup.MaxScroll(sections)` as the clamp bound.
+        `model.helpScroll` + `updateShowingHelp` handle `up`/`k`
+        (scroll back), `down`/`j` (scroll forward, clamped), and
+        `esc`/`?` (close, resetting scroll to 0); other keys are now a
+        no-op instead of "any key closes" (needed since arrows/j/k are
+        reserved for scrolling). `go build ./...` and `go test ./...`
+        both still pass.
+      - ✅ **Fine-tune, 2026-09-30 — lazygit-matching redesign
+        (uncommitted).** After the user asked me to research how lazygit
+        itself implements this menu (cloned `jesseduffield/lazygit` and
+        read `options_menu_action.go`/`menu_panel.go`/`menu_context.go`/
+        `list_renderer.go`/`english.go`), the popup was reworked to
+        actually match lazygit's real "Keybindings" menu conventions
+        rather than a static all-panels dump:
+        - **Context-sensitive Local/Global/Navigation**, computed live
+          per current focus (and, for Tasks, the active tab) instead of
+          a static reference — mirrors lazygit's own
+          `getBindings(ctx)`. Local is per-panel (Tasks: tab-aware
+          done/delete/purge/reopen/restore plus edit/priority/due
+          date/project filter/reorder/search; Projects: rename/search;
+          omitted entirely for Status/Details/Tags, which have nothing
+          panel-specific to show). Global now excludes `0-4/tab` (moved
+          to Navigation, matching lazygit's own split — panel-switching
+          is movement, not a data action). Navigation always has
+          `0-4`/`tab`/`shift+tab`; `↑/k`/`↓/j` only appear there while a
+          list panel (Tasks/Projects/Tags) has focus.
+        - **Title-in-border** — popup title changed from a body line
+          reading "Keyboard Shortcuts" to lazygit's own menu title
+          "Keybindings", now embedded in the top border via this repo's
+          existing `panel.Frame` helper (the same title-in-border
+          convention `tasklist`/`projects`/`tags` already use), instead
+          of a separate bordered box built by hand.
+        - **Green rule-style section headers** — `"─── Local"` etc.,
+          bold + `panel.FocusedColor`, matching lazygit's
+          `formatListSectionHeader` + `FgGreen.SetBold()`.
+        - **Right-aligned key column** — key width now computed
+          dynamically per-render from the longest key actually present
+          (was previously left-aligned in a fixed-width column),
+          matching lazygit's `AlignRight` key column. The scroll-
+          position/`esc`/`?`-close hint moved into `panel.Frame`'s
+          bottom-border footer parameter (lazygit-style, e.g. a
+          `"3/10"`-style indicator baked into the border line) rather
+          than a separate in-body hint line.
+        - **Bug fix caught during manual visual QA**: the right-align
+          padding math initially used `len()` (byte count) rather than
+          display-column width, so keys containing multi-byte-but-
+          single-column runes (`↑/k`, `↓/j`) were under-padded and
+          didn't actually line up with same-width ASCII keys (`0-4`,
+          `tab`). Fixed by switching `keyWidth`/`padLeft` to
+          `ansi.StringWidth` (the same display-width-aware approach
+          `popup.Overlay` already uses elsewhere in this codebase),
+          verified via a manual demo render at both 80- and 44-column
+          widths.
+        - `helpSections()` in `main.go` became a `model` method (was a
+          package-level static function) since it now needs `m.focus`/
+          `m.list.Status()`; all tests that previously called it as a
+          free function were rewritten to construct a `model` with the
+          relevant focus/tab and call `m.helpSections()`.
+        `go build ./...`, `go test ./...`, `gofmt -l`, and `go vet ./...`
+        all pass/clean. Manually verified (throwaway demo renders, no
+        committed test files) that each focus state yields the expected
+        section set: Tasks/Todo → Local(10)+Global(6)+Nav(4); Projects →
+        Local(3)+Global(6)+Nav(4); Tags → Global(6)+Nav(4, no Local);
+        Status/Details → Global(6)+Nav(2, no Local, no up/down since
+        those panels aren't list-navigable).
+      - ✅ **Fine-tune, 2026-09-30 — corrections after side-by-side
+        screenshot review against real lazygit (uncommitted).** The
+        previous round's re-implementation still didn't match lazygit's
+        actual rendered "Keybindings" menu once compared screenshot-to-
+        screenshot; re-verified against `jesseduffield/lazygit`'s real
+        source (`menu_context.go`'s `GetDisplayStrings`) rather than
+        assumptions, and fixed:
+        - **Key column color**: was blue (copied from this app's own
+          status bar), should be (and now is) **cyan** — lazygit
+          hardcodes `style.FgCyan` for the menu's key column regardless
+          of theme, independent of the status bar's own
+          `optionsTextColor` (which really is blue, so that assumption
+          wasn't unreasonable, just the wrong source to copy from).
+        - **Description column color**: was dimmed gray, should be (and
+          now is) **plain/unstyled** — lazygit renders menu item
+          descriptions in the terminal's default foreground, not dimmed.
+        - **Section header format**: changed from a left-only
+          `"─── Title"` rule to a symmetric **`"--- Title ---"`** rule
+          (both sides), matching the actual rendered menu in the
+          reference screenshot, and now **indented to start under the
+          description column** (after the key column's width) rather
+          than flush-left — lazygit's own header rows occupy the
+          description column, leaving the key column blank for that row.
+        - **Border/title color**: was reusing `panel.FocusedColor`
+          (green, the "this panel is focused" convention used
+          elsewhere in this app); lazygit's actual Keybindings menu uses
+          a **neutral/default-colored** border+title instead (only the
+          green is on the section headers) — `panel.Frame` is now called
+          with `focused=false`.
+        - **Size**: the popup was a small, fixed ~74×16 box; a full
+          screenshot of lazygit's real menu (`lazygit-no-crop.png`,
+          provided by the user for direct comparison against the running
+          app) shows a much larger box, roughly 35-60% of the terminal's
+          width/height and scaling with it. `helppopup.Box` gained a
+          `screenHeight` parameter and a new `VisibleRows(screenHeight)`
+          function that scales the popup's visible-row budget between
+          `minVisibleRows` (8) and `maxVisibleRows` (40) based on the
+          real terminal height (`reservedRows` (6) reserved for the
+          border + a small edge margin), replacing the old hardcoded
+          14-row constant. `MaxScroll` and `Box` both take the new
+          `screenHeight` argument; `main.go`'s call sites now pass the
+          model's real `height` instead of a bare scroll offset.
+        All touched packages (`internal/ui/helppopup`, `cmd/lazytask`)
+        rebuilt/retested: `go build ./...`, `go test ./...`, `gofmt -l`,
+        `go vet ./...` all pass/clean. Manually re-rendered the full app
+        view (120x45, help open, default/Tasks-Todo focus) to confirm all
+        three sections (Local/Global/Navigation) now fit on one screen
+        without scrolling at a realistic terminal size, with the
+        corrected header format/indent and colors.
 
 - [ ] **Funnel for adhoc tasks** — a quick-capture flow for one-off/adhoc
       tasks (needs scope clarification before chunking).

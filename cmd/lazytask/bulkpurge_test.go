@@ -270,24 +270,39 @@ func TestView_PurgingAllShowsSingularNoun(t *testing.T) {
 	assert.Contains(t, view, "all 1 deleted task?")
 }
 
-// TestStatusBindings_ShiftXShownOnlyOnDeletedTab verifies the "X"/"purge
-// all" status-bar hint only appears while focused on the Tasks panel's
-// Deleted tab.
-func TestStatusBindings_ShiftXShownOnlyOnDeletedTab(t *testing.T) {
+// TestStatusBindings_ShiftXNotInStatusBar verifies "X" (purge all) is no
+// longer part of the always-visible status bar on any tab, per the "?"
+// help popup design (2026-09-30): Tasks-panel-local status bar hints were
+// trimmed down to just navigation, with the rest (including "X") moved to
+// the "?" popup only (see TestHelpSections_ContainsPurgeAllHint).
+func TestStatusBindings_ShiftXNotInStatusBar(t *testing.T) {
 	tasks := []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}
 
-	m := model{list: tasklist.New(tasks), focus: focusTasks} // Todo
-	for _, b := range m.statusBindings() {
-		assert.NotEqual(t, "X", b.Key, "X hint must not show outside the Deleted tab")
-	}
-
-	m = model{list: deletedTabList(tasks), focus: focusTasks}
-	var sawX bool
-	for _, b := range m.statusBindings() {
-		if b.Key == "X" {
-			sawX = true
-			assert.Equal(t, "purge all", b.Label)
+	for _, m := range []model{
+		{list: tasklist.New(tasks), focus: focusTasks},   // Todo
+		{list: deletedTabList(tasks), focus: focusTasks}, // Deleted
+	} {
+		for _, b := range m.statusBindings() {
+			assert.NotEqual(t, "X", b.Key, "X hint must not show in the status bar on any tab")
 		}
 	}
-	assert.True(t, sawX, "expected an X/'purge all' hint on the Deleted tab")
+}
+
+// TestHelpSections_ContainsPurgeAllHint verifies the "?" help popup's
+// Local section still documents "X"/"purge all" while focused on the Tasks
+// panel's Deleted tab, even though it was trimmed from the status bar.
+func TestHelpSections_ContainsPurgeAllHint(t *testing.T) {
+	tasks := []taskwarrior.Task{{ID: 1, Description: "Buy milk"}}
+	m := model{list: deletedTabList(tasks), focus: focusTasks}
+
+	var found bool
+	for _, sec := range m.helpSections() {
+		for _, b := range sec.Bindings {
+			if b.Key == "X" {
+				found = true
+				assert.Contains(t, b.Label, "purge all")
+			}
+		}
+	}
+	assert.True(t, found, "expected helpSections to document the X/purge-all key on the Deleted tab")
 }

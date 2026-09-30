@@ -21,6 +21,7 @@ import (
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/datepick"
+	"github.com/tkilb/lazytask/internal/ui/helppopup"
 	"github.com/tkilb/lazytask/internal/ui/panel"
 	"github.com/tkilb/lazytask/internal/ui/popup"
 	"github.com/tkilb/lazytask/internal/ui/projects"
@@ -139,41 +140,28 @@ var globalBindings = []statusbar.Binding{
 	{Key: "u", Label: "undo"},
 	{Key: "ctrl+r", Label: "redo"},
 	{Key: "S", Label: "sync"},
+	{Key: "?", Label: "help"},
 	{Key: "q", Label: "quit"},
 }
 
-// tasksLocalBindings are only active while the Tasks panel has focus. They
-// are appended after globalBindings in the status bar so the hint line
-// reflects exactly which keys will do something right now. "r" and the
-// Deleted-tab-specific "x" (purge) label are only meaningful on certain
-// tabs, so they're added/overridden separately by statusBindings rather
-// than listed here. "a" (add) moved to globalBindings since it's no longer
-// Tasks-panel-local.
+// tasksLocalBindings are only active while the Tasks panel has focus. Per
+// the "?" help popup design (2026-09-30), the status bar now only keeps
+// navigation visible here; every other Tasks-panel action (tabs, done,
+// delete/purge, edit, priority, due date, project filter, reorder, search,
+// reopen/restore, purge all, ...) is still live but only documented in the
+// "?" popup (see helpSections), to keep this always-visible line short.
 var tasksLocalBindings = []statusbar.Binding{
 	{Key: "↑/k", Label: "up"},
 	{Key: "↓/j", Label: "down"},
-	{Key: "[/]", Label: "tabs"},
-	{Key: "d", Label: "done"},
-	{Key: "x", Label: "delete"},
-	{Key: "e", Label: "edit"},
-	{Key: "h/m/l", Label: "priority"},
-	{Key: "D", Label: "due date"},
-	{Key: "p", Label: "project filter"},
-	{Key: "ctrl+j/k", Label: "reorder"},
-	{Key: "/", Label: "search"},
-	{Key: "n/N", Label: "next/prev match"},
 }
 
 // projectsLocalBindings are only active while the Projects panel has
-// focus: navigating the list automatically updates the shared project
-// filter, and "R" opens the rename-project prompt on the entry under the
-// cursor (only meaningful on a real project, not the (all)/(none) special
-// entries, but shown unconditionally here for simplicity, matching how
-// other bindings lists don't special-case every possible selection).
+// focus. Per the same "?" help popup design, "R" (rename) and "/"/"n"/"N"
+// (search) stay live but move to the "?" popup only; the status bar here
+// keeps just navigation.
 var projectsLocalBindings = []statusbar.Binding{
 	{Key: "↑/k", Label: "up"},
 	{Key: "↓/j", Label: "down"},
-	{Key: "R", Label: "rename"},
 }
 
 // tagsLocalBindings are only active while the Tags panel has focus:
@@ -184,42 +172,119 @@ var tagsLocalBindings = []statusbar.Binding{
 }
 
 // statusBindings returns the keybinding hints to show in the status bar for
-// the model's current focus: global bindings always apply, and Tasks-panel
-// bindings are appended only while that panel is focused (local bindings
-// per other panels are added here as those panels grow their own actions).
-// "d" is hidden on the Done tab since a task there is already done. "r" is
-// shown only on the Done/Deleted tabs (labeled "reopen" on Done, "restore"
-// on Deleted), and "x" is relabeled "purge" on the Deleted tab since it
-// becomes an irreversible permanent delete there, matching the actual key
-// handling in Update. "X" ("purge all") is only shown on the Deleted tab,
-// matching its X-key handling in Update, which is a no-op on every other
-// tab.
+// the model's current focus: global bindings always apply, and per-panel
+// local bindings are appended only while that panel is focused. This is
+// deliberately a short, always-visible subset (nav + the most common
+// global actions) — the full reference, including every key trimmed from
+// here, lives in the "?" help popup (see helpSections).
 func (m model) statusBindings() []statusbar.Binding {
-	bindings := make([]statusbar.Binding, 0, len(globalBindings)+len(tasksLocalBindings)+1)
+	bindings := make([]statusbar.Binding, 0, len(globalBindings)+len(tasksLocalBindings))
 	bindings = append(bindings, globalBindings...)
 	if m.focus == focusTasks {
-		for _, b := range tasksLocalBindings {
-			if b.Key == "d" && m.list.Status() == tasklist.TabDone {
-				continue
-			}
-			if b.Key == "x" && m.list.Status() == tasklist.TabDeleted {
-				b.Label = "purge"
-			}
-			bindings = append(bindings, b)
-		}
-		switch m.list.Status() {
-		case tasklist.TabDone:
-			bindings = append(bindings, statusbar.Binding{Key: "r", Label: "reopen"})
-		case tasklist.TabDeleted:
-			bindings = append(bindings, statusbar.Binding{Key: "r", Label: "restore"})
-			bindings = append(bindings, statusbar.Binding{Key: "X", Label: "purge all"})
-		}
+		bindings = append(bindings, tasksLocalBindings...)
 	}
 	if m.focus == focusProjects {
 		bindings = append(bindings, projectsLocalBindings...)
 	}
 	if m.focus == focusTags {
 		bindings = append(bindings, tagsLocalBindings...)
+	}
+	return bindings
+}
+
+// helpGlobalBindings are shown in the "?" popup's Global section: actions
+// available no matter which panel has focus. Unlike globalBindings (the
+// status bar's trimmed set), this omits "0-4/tab" — panel switching is
+// movement, so it's grouped under Navigation instead, matching lazygit's
+// own Local/Global/Navigation split.
+var helpGlobalBindings = []statusbar.Binding{
+	{Key: "a", Label: "add"},
+	{Key: "u", Label: "undo"},
+	{Key: "ctrl+r", Label: "redo"},
+	{Key: "S", Label: "sync"},
+	{Key: "?", Label: "help"},
+	{Key: "q", Label: "quit"},
+}
+
+// helpSections returns the "?" help popup's keybinding reference for the
+// model's current context, mirroring lazygit's own "Keybindings" menu:
+// a Local section scoped to whichever panel (and, for Tasks, tab) is
+// currently focused, then Global, then Navigation — recomputed live on
+// every call rather than a static all-panels dump, so the popup only ever
+// shows keys that are actually live right now.
+func (m model) helpSections() []helppopup.Section {
+	sections := make([]helppopup.Section, 0, 3)
+	if local := m.helpLocalBindings(); len(local) > 0 {
+		sections = append(sections, helppopup.Section{Title: "Local", Bindings: local})
+	}
+	sections = append(sections, helppopup.Section{Title: "Global", Bindings: helpGlobalBindings})
+	sections = append(sections, helppopup.Section{Title: "Navigation", Bindings: m.helpNavigationBindings()})
+	return sections
+}
+
+// helpLocalBindings returns the panel-specific bindings for the Local
+// section, scoped to whichever panel has focus (and, for Tasks, the
+// active tab). Returns nil when the focused panel has nothing beyond
+// navigation to show (Status, Details, Tags), so helpSections can omit
+// an empty Local section entirely.
+func (m model) helpLocalBindings() []statusbar.Binding {
+	switch m.focus {
+	case focusTasks:
+		bindings := []statusbar.Binding{
+			{Key: "[/]", Label: "switch tab (Todo/Done/Deleted)"},
+		}
+		switch m.list.Status() {
+		case tasklist.TabTodo:
+			bindings = append(bindings,
+				statusbar.Binding{Key: "d", Label: "mark done"},
+				statusbar.Binding{Key: "x", Label: "delete"},
+			)
+		case tasklist.TabDone:
+			bindings = append(bindings,
+				statusbar.Binding{Key: "x", Label: "delete"},
+				statusbar.Binding{Key: "r", Label: "reopen"},
+			)
+		case tasklist.TabDeleted:
+			bindings = append(bindings,
+				statusbar.Binding{Key: "x", Label: "purge"},
+				statusbar.Binding{Key: "X", Label: "purge all"},
+				statusbar.Binding{Key: "r", Label: "restore"},
+			)
+		}
+		bindings = append(bindings,
+			statusbar.Binding{Key: "e", Label: "edit"},
+			statusbar.Binding{Key: "h/m/l", Label: "priority: high/medium/low"},
+			statusbar.Binding{Key: "D", Label: "set due date"},
+			statusbar.Binding{Key: "p", Label: "filter by project"},
+			statusbar.Binding{Key: "ctrl+j/k", Label: "reorder down/up"},
+			statusbar.Binding{Key: "/", Label: "search"},
+			statusbar.Binding{Key: "n/N", Label: "next/prev match"},
+		)
+		return bindings
+	case focusProjects:
+		return []statusbar.Binding{
+			{Key: "R", Label: "rename project"},
+			{Key: "/", Label: "search"},
+			{Key: "n/N", Label: "next/prev match"},
+		}
+	default:
+		return nil
+	}
+}
+
+// helpNavigationBindings returns the Navigation section's bindings:
+// panel-switching always applies, and list up/down only applies while a
+// list-based panel (Tasks/Projects/Tags) has focus.
+func (m model) helpNavigationBindings() []statusbar.Binding {
+	bindings := []statusbar.Binding{
+		{Key: "0-4", Label: "jump to panel"},
+		{Key: "tab/shift+tab", Label: "next/prev panel"},
+	}
+	if m.focus == focusTasks || m.focus == focusProjects || m.focus == focusTags {
+		bindings = append(bindings,
+			statusbar.Binding{Key: "↑/k", Label: "up"},
+			statusbar.Binding{Key: "↓/j", Label: "down"},
+		)
 	}
 	return bindings
 }
@@ -664,6 +729,8 @@ type model struct {
 	searchInput      textinput.Model
 	searchScope      searchScope
 	popups           popup.Model
+	showingHelp      bool
+	helpScroll       int
 	quitting         bool
 	pendingFocusID   int
 	focus            panelFocus
@@ -1675,6 +1742,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.searching {
 		return m.updateSearching(msg)
 	}
+	if m.showingHelp {
+		return m.updateShowingHelp(msg)
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1695,6 +1765,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, quitCmd(m.syncer)
+		case "?":
+			m.showingHelp = true
+			m.helpScroll = 0
+			return m, nil
 		case "0", "1", "2", "3", "4":
 			m = m.setFocus(panelKeyBindings[msg.String()])
 			return m, nil
@@ -2214,6 +2288,33 @@ func (m model) updateCompleting(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.completing = false
 			return m, nil
 		}
+	}
+	return m, nil
+}
+
+// updateShowingHelp handles messages while the "?" keyboard-shortcuts
+// reference popup is open: up/k and down/j scroll the (possibly
+// longer-than-one-screen) reference by one line, clamped to
+// [0, helppopup.MaxScroll]; q/esc/? close it. Other keys are ignored
+// (rather than "any key closes", used by simpler confirm-style popups)
+// since scrolling needs to reserve the arrow/j/k keys.
+func (m model) updateShowingHelp(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch keyMsg.String() {
+	case "up", "k":
+		if m.helpScroll > 0 {
+			m.helpScroll--
+		}
+	case "down", "j":
+		if max := helppopup.MaxScroll(m.helpSections(), m.height); m.helpScroll < max {
+			m.helpScroll++
+		}
+	case "esc", "?":
+		m.showingHelp = false
+		m.helpScroll = 0
 	}
 	return m, nil
 }
@@ -2781,6 +2882,10 @@ func (m model) View() string {
 		view = popup.Overlay(view, m.reassignInput.View(), width, height)
 	}
 
+	if m.showingHelp {
+		view = popup.Overlay(view, helppopup.Box(m.helpSections(), width, height, m.helpScroll), width, height)
+	}
+
 	if msg, ok := m.popups.Current(); ok {
 		view = popup.Overlay(view, popup.Box(msg, width), width, height)
 	}
@@ -2910,7 +3015,22 @@ func renderAnnotationLines(a taskwarrior.Annotation) []string {
 func (m model) renderGrid() string {
 	leftWidth, rightWidth, statusHeight, _, _, fullHeight := m.gridDims()
 
-	status := panel.Render(panelTitle(focusStatus), m.statusPanelContent(), leftWidth, statusHeight, m.focus == focusStatus)
+	// While the help popup is open, it owns focus (rendered with a green
+	// border of its own); the panel that had focus before opening help
+	// should no longer look focused underneath it. This only affects the
+	// local copy used for this render, not the real model state, so
+	// closing help restores the previous panel's focus exactly as before.
+	statusFocused := m.focus == focusStatus
+	detailsFocused := m.focus == focusDetails
+	if m.showingHelp {
+		statusFocused = false
+		detailsFocused = false
+		m.list = m.list.SetFocused(false)
+		m.projects = m.projects.SetFocused(false)
+		m.tags = m.tags.SetFocused(false)
+	}
+
+	status := panel.Render(panelTitle(focusStatus), m.statusPanelContent(), leftWidth, statusHeight, statusFocused)
 	tasksPanel := m.list.View()
 	projectsPanel := m.projects.View()
 	tagsPanel := m.tags.View()
@@ -2918,7 +3038,7 @@ func (m model) renderGrid() string {
 
 	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, bottomRow)
 
-	details := panel.Render(panelTitle(focusDetails), m.detailsPanelContent(), rightWidth, fullHeight, m.focus == focusDetails)
+	details := panel.Render(panelTitle(focusDetails), m.detailsPanelContent(), rightWidth, fullHeight, detailsFocused)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, details)
 }
