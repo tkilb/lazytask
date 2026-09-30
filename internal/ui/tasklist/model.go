@@ -408,7 +408,7 @@ func (m Model) View() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(formatRow(innerWidth, "ID", "Description", "Project", "Pr.", "Due")))
+	b.WriteString(headerStyle.Render(formatRow(innerWidth, "ID", "Description", "Project", "P", "Due")))
 	b.WriteString("\n")
 
 	nowFn := m.now
@@ -450,7 +450,7 @@ func (m Model) View() string {
 // Phase 6, so its short delta value sits flush against the right edge of
 // its column. Priority is left-aligned (not right, like Due) since its
 // column is sized exactly to its content ("H"/"M"/"L"), so right vs. left
-// alignment only matters when reading the header ("Pr.") against the
+// alignment only matters when reading the header ("P") against the
 // value below it — left keeps both flush on their shared left edge.
 // Project stays left-aligned as well (rather than right-aligned like
 // Due) since project names vary enough in length that right-justifying
@@ -476,7 +476,7 @@ func formatRow(width int, id, description, project, priority, due string) string
 // are sized to their actual content (not a generic fixed width) since
 // both are short, right-aligned columns and an oversized width just
 // leaves a wall of wasted blank space to their left: Priority only ever
-// holds "H"/"M"/"L" (1 char) and its header is "Pr." (3 chars), so 3 is
+// holds "H"/"M"/"L" (1 char) and its header is "P" (1 char), so 1 is
 // exact; Due holds a signed day-delta (rarely more than 3-4 digits) with
 // a "Due" (3-char) header, so 5 comfortably fits e.g. "-999" with a
 // leading space to spare.
@@ -484,7 +484,7 @@ func columnWidths(width int) (idWidth, descWidth, projectWidth, priorityWidth, d
 	const (
 		fixedIDWidth       = 4
 		fixedProjectWidth  = 12
-		fixedPriorityWidth = 3
+		fixedPriorityWidth = 1
 		fixedDueWidth      = 3
 	)
 	// -6, not -5: four single-space separators between the five columns,
