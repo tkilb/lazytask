@@ -672,10 +672,56 @@ shipped). Human requested this instead run automatically so devices that
         without scrolling at a realistic terminal size, with the
         corrected header format/indent and colors.
 
-- [ ] **Funnel for adhoc tasks** — a quick-capture flow for one-off/adhoc
-      tasks (needs scope clarification before chunking).
-- [ ] **Redo status bar, maybe rename to "suggested"** — revisit the status
-      bar's current design/labeling.
+- [ ] **Redo status bar → "Suggested" bar (scope decided 2026-09-30, human
+      sign-off).** Theme: "what's next for the user." The bottom bar stops
+      showing keybinding hints entirely (the `?` popup is now the single
+      source of truth for those) and instead renders one dynamic
+      "Suggested" line pointing at the single most relevant task, in this
+      priority order (highest to lowest):
+      1. A **started** task (native taskwarrior `start`/`stop`
+         attribute — "what I'm actively doing right now"). If more than
+         one task is started, needs a tie-break rule (e.g. most-recently
+         started, or highest urgency among started).
+      2. A **`+next`-tagged** task (native taskwarrior tag convention —
+         "queued up to do soon"), if nothing is started.
+      3. An **orphan task** (no project assigned — see "Funnel for adhoc
+         tasks" below), if nothing is started/next-tagged. This is
+         intentionally ranked *below* started/next: an explicit "I'm
+         doing this" or "I'm about to do this" signal always outranks
+         "this needs a home."
+      4. Otherwise, the **highest-urgency** task (existing taskwarrior
+         `Urgency`/`UrgencyOffset` sort), as today's fallback.
+      - New keybindings: `s` toggles start/stop on the selected task
+        (writes/clears taskwarrior's `start` attribute — `S` is already
+        taken by manual sync). `n` toggles the `next` tag on the
+        selected task, reusing the existing `n`/`N` keys — no real
+        conflict, since `n`/`N` currently only mean "next/prev search
+        match" while a `/` search is active; outside of search mode
+        they're free to mean "toggle next-tag" instead.
+      - `f` focuses the Tasks panel, applies the existing `p` project
+        filter to whichever project the Suggested task belongs to (no-op
+        for orphan tasks, which have none), and moves the cursor to that
+        task — so the user can jump straight to acting on it.
+      - Display rule still needed for a task that is both started *and*
+        `+next`-tagged (e.g. label reads "started", precedence note only,
+        since rank 1 already covers it — no separate combined state
+        needed given the ranking above).
+      - Needs follow-up chunking: read/write plumbing for `start`/`stop`
+        and the `next` tag in `internal/taskwarrior`, the ranking/
+        selection logic, the new `Suggested` render replacing
+        `statusbar.Render`, and the `s`/`n`/`f` keybinding wiring.
+- [ ] **Funnel for adhoc tasks (scope decided 2026-09-30, human
+      sign-off).** Reframed from "a quick-capture flow" to **orphan
+      detection**: most adhoc/one-off tasks are expected to arrive via
+      the native `task add` CLI (not lazytask's own Add Task form), so no
+      new capture UI is needed. Instead, any task with no project
+      assigned — regardless of whether it originated from the CLI or
+      from lazytask's own `a` Add Task form (which already allows
+      skipping project) — is "funneled" into visibility via rank 3 of
+      the Suggested bar above, prompting the user to give it a project
+      home. This item is effectively satisfied by the Suggested bar's
+      orphan-ranking behavior; no separate implementation is expected
+      beyond that.
 
 ### Phase 7 — Tags (continuation)
 
