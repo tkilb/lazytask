@@ -9,10 +9,15 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/tkilb/lazytask/internal/ui/panel"
 )
 
 var (
-	borderColor = lipgloss.Color("62")
+	// borderColor matches panel.FocusedColor, the same green used by every
+	// other focused panel/box in the app, rather than picking its own
+	// color — this popup is always shown "focused" while open.
+	borderColor = panel.FocusedColor
 
 	// bodyStyle draws the left/right/bottom border only; the top border is
 	// built by hand in View() so the title and key hints can be embedded in
@@ -30,10 +35,18 @@ var (
 			Foreground(borderColor)
 )
 
-// minPanelWidth is used when no tea.WindowSizeMsg has been received yet.
-const minPanelWidth = 80
+// The popup is deliberately narrow and capped (rather than stretching to
+// the full terminal width): maxWidth comfortably fits the longest
+// title/hint combination used by this component's callers (Add Task,
+// Rename Project, Reassign Project), while minWidth is a floor for very
+// narrow terminals. Mirrors internal/ui/datepick and internal/ui/popup's
+// same max/shrink/floor sizing pattern.
+const (
+	minWidth = 60
+	maxWidth = 64
+)
 
-const hintText = "Press <enter> to add, <esc> to cancel"
+const hintText = "<enter> to add, <esc> to cancel"
 
 // Model is a Bubble Tea model rendering a single-line bordered text input
 // panel for entering a new task description. This package has no
@@ -124,9 +137,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 // View implements tea.Model.
 func (m Model) View() string {
-	width := m.width
-	if width <= 0 {
-		width = minPanelWidth
+	// Cap the popup at maxWidth rather than stretching it to the full
+	// terminal width (m.width); shrink further only if the terminal
+	// itself is narrower than maxWidth, with minWidth as a hard floor.
+	width := maxWidth
+	if m.width > 0 && m.width < width {
+		width = m.width
+	}
+	if width < minWidth {
+		width = minWidth
 	}
 	innerWidth := width - 2
 	if innerWidth < 16 {
@@ -139,9 +158,14 @@ func (m Model) View() string {
 
 // topBorder builds the box's top edge with the title embedded on the left
 // and the key-binding hint embedded on the right, lazygit-style, e.g.
-// "╭─ Add Task ─────── Press <enter> to add, <esc> to cancel ─╮".
+// "╭─ Add Task ─────── <enter> to add, <esc> to cancel ─╮". The
+// corner/fill characters are explicitly colored with borderColor (via
+// lineStyle) rather than left unstyled, so the top edge matches the
+// colored sides/bottom border drawn by bodyStyle instead of appearing as a
+// differently-colored (uncolored) segment.
 func (m Model) topBorder(innerWidth int) string {
 	border := lipgloss.RoundedBorder()
+	lineStyle := lipgloss.NewStyle().Foreground(borderColor)
 
 	title := " " + titleStyle.Render(m.title) + " "
 	hint := " " + hintStyle.Render(m.hint) + " "
@@ -155,10 +179,10 @@ func (m Model) topBorder(innerWidth int) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(border.TopLeft)
+	b.WriteString(lineStyle.Render(border.TopLeft))
 	b.WriteString(title)
-	b.WriteString(strings.Repeat(border.Top, fillWidth))
+	b.WriteString(lineStyle.Render(strings.Repeat(border.Top, fillWidth)))
 	b.WriteString(hint)
-	b.WriteString(border.TopRight)
+	b.WriteString(lineStyle.Render(border.TopRight))
 	return b.String()
 }

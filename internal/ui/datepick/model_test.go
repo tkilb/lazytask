@@ -1,11 +1,15 @@
 package datepick
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
@@ -48,6 +52,19 @@ func TestResolvedValidCord(t *testing.T) {
 	got, ok := m.Resolved()
 	assert.True(t, ok)
 	assert.True(t, got.Equal(fixedNow.AddDate(0, 0, 2)))
+}
+
+func TestResolvedZeroMeansToday(t *testing.T) {
+	fixedNow := time.Date(2024, time.January, 10, 9, 0, 0, 0, time.UTC)
+
+	for _, in := range []string{"0", "0d"} {
+		m := New().WithNow(func() time.Time { return fixedNow }).Focus()
+		m = typeString(t, m, in)
+
+		got, ok := m.Resolved()
+		assert.True(t, ok, "input %q should resolve", in)
+		assert.True(t, got.Equal(fixedNow), "input %q should resolve to today, got %v", in, got)
+	}
 }
 
 func TestResolvedInvalidCord(t *testing.T) {
@@ -177,4 +194,40 @@ func TestViewShowsErrorHint(t *testing.T) {
 
 	view := m.View()
 	assert.Contains(t, view, "Invalid input")
+}
+
+func TestView_WidthCappedRegardlessOfTerminalWidth(t *testing.T) {
+	m := New().Focus()
+	// A wide terminal used to make the popup stretch to the full terminal
+	// width; it should now stay capped at maxWidth instead.
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 220, Height: 40})
+
+	lines := strings.Split(m.View(), "\n")
+	require.NotEmpty(t, lines)
+	got := ansi.StringWidth(lines[0])
+	assert.LessOrEqual(t, got, maxWidth+2, "top border line %q is wider than the capped max", lines[0])
+}
+
+func TestView_WidthShrinksForNarrowTerminal(t *testing.T) {
+	m := New().Focus()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 40})
+
+	lines := strings.Split(m.View(), "\n")
+	require.NotEmpty(t, lines)
+	got := ansi.StringWidth(lines[0])
+	assert.LessOrEqual(t, got, minWidth+2)
+}
+
+// TestTopBorder_FullyColored guards against the top border's corner/fill
+// characters being left unstyled while the rest of the box (sides,
+// bottom, title, hint) is colored — previously this made the popup render
+// as "half" one color/"half" default terminal foreground.
+func TestTopBorder_FullyColored(t *testing.T) {
+	m := New().Focus()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	top := strings.Split(m.View(), "\n")[0]
+	colorSeq := lipgloss.NewStyle().Foreground(borderColor).Render("x")
+	prefix := colorSeq[:strings.IndexRune(colorSeq, 'x')]
+	assert.True(t, strings.HasPrefix(top, prefix), "top border corner should open with the same color escape as the rest of the box")
 }

@@ -358,8 +358,78 @@ shipped). Human requested this instead run automatically so devices that
       `TestDueColor`, `TestRenderDataRow_DueCellColoredByDelta`,
       `TestModel_WithNow_UsedByView`.
 
-- [ ] **Quick Duedate update ** — shift D on a existing task will summon a popup
-      that uses the same duedate mechanism that add has.
+- [x] **Quick Duedate update** — shift D on an existing task summons a popup
+      (`internal/ui/datepick`) using the same cord/absolute-date parsing as
+      the Add form's due-date field (`datepick.ResolveInput`). Found
+      already fully implemented and committed (`'D'` keybinding in
+      `cmd/lazytask/main.go`'s `updateDatePicking`, wired to
+      `setDueTask`/`m.duer`) when checked 2026-09-30 — this checkbox was
+      simply never ticked. No new code needed; verified `go build ./...`
+      and `go test ./...` both still pass.
+  - **Fine-tune, 2026-09-30 — "today" as a due date.** `dateparse.Parse`
+    now accepts bare `"0"` (no unit letter, since a unit is meaningless
+    for zero) and `N == 0` for any unit (`"0d"`/`"0w"`/`"0b"`), all
+    resolving to the current instant (today) via `Cord.Resolve`. Old
+    behavior rejected `N <= 0` outright. `internal/ui/datepick`'s
+    placeholder text updated to mention `0`. Covered by new
+    `dateparse.TestParse` cases (`"0"`, `"0d"`, `"0w"`, `"0b"`), a new
+    `TestCordResolve` case, a `TestResolveString` case, and
+    `datepick.TestResolvedZeroMeansToday`.
+  - **Fine-tune, 2026-09-30 — popup visuals.** Two bugs fixed in
+    `internal/ui/datepick`'s rendering, both pre-existing since the popup
+    was first wired up: (1) the box used its own hardcoded blue-ish
+    border color (`lipgloss.Color("62")`) instead of the app's standard
+    focused-panel color; it now reuses `panel.FocusedColor` (green, same
+    as every other focused panel/box). (2) the top border's corner/fill
+    characters (`border.TopLeft`/dash-fill/`border.TopRight`) were
+    rendered with **no** color style at all, while the title/hint text
+    and the box's sides/bottom border *were* colored — this is what
+    looked like "half blue": one edge uncolored, the rest colored. Fixed
+    by wrapping the corner/fill segments in the same color style as the
+    rest of the box. (3) Width: the popup previously rendered at the
+    *full terminal width* (it read `m.width` from `tea.WindowSizeMsg`
+    directly and used it as the box width verbatim) — now capped to a
+    `maxWidth` of 64 cols (shrinking further, down to a `minWidth` floor
+    of 58, only if the terminal itself is narrower), mirroring
+    `internal/ui/popup`'s existing max/shrink/floor sizing pattern.
+    Covered by new tests `TestView_WidthCappedRegardlessOfTerminalWidth`,
+    `TestView_WidthShrinksForNarrowTerminal`, `TestTopBorder_FullyColored`.
+  - **Fine-tune, 2026-09-30 — trimmed "Press " from popup hints.**
+    Shortened every "Press <enter> to ..." hint to just "<enter> to ..."
+    to save horizontal space: `datepick`'s hint, `addform`'s default
+    hint, and the two inline hints main.go passes into
+    `addform.NewNamed` for the Rename/Reassign Project popups.
+  - **Fine-tune, 2026-09-30 — same border-color/width fixes applied to
+    `internal/ui/addform`.** The Add Task / Rename Project / Reassign
+    Project popups (all built on `addform.Model`, overlaid the same way
+    as the due-date popup) had the identical pre-existing bugs: hardcoded
+    blue-ish `lipgloss.Color("62")` border instead of
+    `panel.FocusedColor`, an unstyled top-border corner/fill (the "half
+    blue" look), and stretching to the full terminal width. Fixed
+    identically — `panel.FocusedColor`, colored corners/fill in
+    `topBorder`, and width capped to `maxWidth` 64 / floored at
+    `minWidth` 60 (sized to fit the longest title+hint combo among this
+    package's three callers, "Reassign Project" + its hint). Covered by
+    new tests mirroring `datepick`'s:
+    `TestView_WidthCappedRegardlessOfTerminalWidth`,
+    `TestView_WidthShrinksForNarrowTerminal`, `TestTopBorder_FullyColored`.
+  - **Fine-tune, 2026-09-30 — `datepick`'s maxWidth/minWidth are now
+    content-derived, not guessed literals.** Human tried lowering
+    `minWidth` to shrink the popup and saw no effect — root cause: on any
+    terminal wider than `maxWidth` (virtually always), `View()` renders
+    at exactly `maxWidth`; `minWidth` only ever applies as a floor on a
+    terminal narrower than that, so it was the wrong constant to tune.
+    Separately, `maxWidth` (64) had gone stale after the "Press " hint
+    trim above shortened the actual content requirement. Replaced both
+    hardcoded literals with `minWidth = 2 + len(" "+title+" ") +
+    len(" "+hintText+" ") + 1` (the true minimum outer width that fits
+    title+hint on one embedded border line without overlap — valid as a
+    Go compile-time constant expression since title/hintText are
+    constant strings) and `maxWidth = minWidth + 2`, so they can't drift
+    out of sync with the actual title/hint text again. Net effect: popup
+    shrank from 64 to 52 cols. `addform`'s equivalent constants were left
+    untouched (not requested), so its 60/64 are still literals sized by
+    hand-computed length in the earlier chunk above.
 - [ ] **Purge all** — bulk-purge action for tasks (needs scope/safety
       clarification before chunking — see Section 5's ask-before-assuming
       rule).

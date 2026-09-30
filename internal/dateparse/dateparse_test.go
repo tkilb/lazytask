@@ -31,7 +31,11 @@ func TestParse(t *testing.T) {
 		{name: "empty", in: "", wantErr: true},
 		{name: "unit only", in: "d", wantErr: true},
 		{name: "unknown unit", in: "2x", wantErr: true},
-		{name: "zero", in: "0d", wantErr: true},
+		{name: "zero days", in: "0d", want: Cord{N: 0, Unit: Days}},
+		{name: "zero weeks", in: "0w", want: Cord{N: 0, Unit: Weeks}},
+		{name: "zero business days", in: "0b", want: Cord{N: 0, Unit: BusinessDays}},
+		{name: "bare zero", in: "0", want: Cord{N: 0, Unit: Days}},
+		{name: "bare zero with whitespace", in: "  0  ", want: Cord{N: 0, Unit: Days}},
 		{name: "negative", in: "-2d", wantErr: true},
 		{name: "non numeric", in: "abcd", wantErr: true},
 	}
@@ -114,6 +118,12 @@ func TestCordResolve(t *testing.T) {
 			// Thu, Fri, (skip Sat/Sun), Mon, Tue, Wed -> +7 calendar days.
 			want: wed.AddDate(0, 0, 7),
 		},
+		{
+			name: "zero days stays on the same instant (today)",
+			cord: Cord{N: 0, Unit: Days},
+			now:  wed,
+			want: wed,
+		},
 	}
 
 	for _, tc := range tests {
@@ -130,6 +140,10 @@ func TestResolveString(t *testing.T) {
 	got, err := ResolveString("2d", now)
 	require.NoError(t, err)
 	assert.True(t, got.Equal(now.AddDate(0, 0, 2)))
+
+	got, err = ResolveString("0", now)
+	require.NoError(t, err)
+	assert.True(t, got.Equal(now), "bare \"0\" should resolve to today")
 
 	_, err = ResolveString("bogus", now)
 	assert.Error(t, err)

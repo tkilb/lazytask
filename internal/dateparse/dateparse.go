@@ -31,11 +31,17 @@ type Cord struct {
 
 // Parse parses s (case-insensitive, surrounding whitespace ignored) into a
 // Cord. s must be one or more digits followed by exactly one of 'd', 'w',
-// or 'b'. N must be a positive integer.
+// or 'b' — except for the bare "0" shorthand (no unit letter required),
+// which resolves to today, since a unit is meaningless when N is zero. N
+// must otherwise be a non-negative integer (zero is allowed, e.g. "0d", to
+// mean "due today").
 func Parse(s string) (Cord, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return Cord{}, fmt.Errorf("dateparse: empty cord")
+	}
+	if s == "0" {
+		return Cord{N: 0, Unit: Days}, nil
 	}
 
 	unitByte := s[len(s)-1] | 0x20 // lowercase the trailing ASCII letter
@@ -45,8 +51,8 @@ func Parse(s string) (Cord, error) {
 	if err != nil {
 		return Cord{}, fmt.Errorf("dateparse: %q: expected digits followed by d/w/b", s)
 	}
-	if n <= 0 {
-		return Cord{}, fmt.Errorf("dateparse: %q: N must be positive", s)
+	if n < 0 {
+		return Cord{}, fmt.Errorf("dateparse: %q: N must not be negative", s)
 	}
 
 	switch Unit(unitByte) {

@@ -1621,7 +1621,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if label, ok := m.projects.Selected(); ok && label != projects.AllLabel && label != projects.NoneLabel {
 					m.renaming = true
 					m.renameFrom = label
-					m.renameInput = addform.NewNamed("Rename Project", "Press <enter> to rename, <esc> to cancel", "New project name...").Focus().SetValue(label)
+					m.renameInput = addform.NewNamed("Rename Project", "<enter> to rename, <esc> to cancel", "New project name...").Focus().SetValue(label)
 					return m, m.renameInput.Init()
 				}
 				return m, nil
@@ -2326,7 +2326,7 @@ func (m model) updateReassigning(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if label == projects.NewProjectLabel {
 				m.reassigning = false
 				m.reassignTyping = true
-				m.reassignInput = addform.NewNamed("Reassign Project", "Press <enter> to assign, <esc> to cancel", "New project name...").Focus()
+				m.reassignInput = addform.NewNamed("Reassign Project", "<enter> to assign, <esc> to cancel", "New project name...").Focus()
 				return m, m.reassignInput.Init()
 			}
 			m.reassigning = false

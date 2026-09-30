@@ -20,10 +20,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tkilb/lazytask/internal/dateparse"
+	"github.com/tkilb/lazytask/internal/ui/panel"
 )
 
 var (
-	borderColor = lipgloss.Color("62")
+	// borderColor matches panel.FocusedColor, the same green used by every
+	// other focused panel/box in the app, rather than picking its own
+	// color — this popup is always shown "focused" while open.
+	borderColor = panel.FocusedColor
 
 	bodyStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -44,17 +48,34 @@ var (
 				Foreground(lipgloss.Color("196"))
 )
 
-const minPanelWidth = 80
-
 const (
 	title    = "Due Date"
-	hintText = "Press <enter> to confirm, <esc> to cancel"
+	hintText = "<enter> to confirm, <esc> to cancel"
 
 	// previewLayout is used to render a resolved cord as a human-readable
 	// date in the preview line, e.g. "Wed Jan 10 2024". Due dates never
 	// carry a time-of-day, so no time component is shown.
 	previewLayout = "Mon Jan 2 2006"
 )
+
+// minWidth is the smallest outer box width that can embed title and
+// hintText into the top border (lazygit-style, both on one line) without
+// them overlapping: 2 corner runes + " "+title+" " + " "+hintText+" " +
+// at least 1 fill dash between them. Computed from the actual strings
+// (constant string concatenation/len are compile-time constants in Go)
+// rather than a guessed literal, so it can't silently drift out of sync
+// if title/hintText are edited later — this is what previously caused
+// confusion: maxWidth was an unrelated hardcoded number, so changing
+// minWidth alone had no visible effect on a normal-size terminal (View
+// only falls back to minWidth when the terminal itself is narrower than
+// maxWidth).
+const minWidth = 2 + len(" "+title+" ") + len(" "+hintText+" ") + 1
+
+// maxWidth is the popup's everyday rendered width on any terminal wide
+// enough to afford it — minWidth plus a little breathing room around the
+// fill dashes, still far short of the old behavior of matching the full
+// terminal width.
+const maxWidth = minWidth + 2
 
 // Model is a Bubble Tea model rendering a single-line bordered text input
 // for a due-date cord (e.g. "2d", "1w", "2b"), with a live preview line
@@ -160,9 +181,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 // View implements tea.Model.
 func (m Model) View() string {
-	width := m.width
-	if width <= 0 {
-		width = minPanelWidth
+	// Cap the popup at maxWidth rather than stretching it to the full
+	// terminal width (m.width); shrink further only if the terminal
+	// itself is narrower than maxWidth, with minWidth as a hard floor.
+	width := maxWidth
+	if m.width > 0 && m.width < width {
+		width = m.width
+	}
+	if width < minWidth {
+		width = minWidth
 	}
 	innerWidth := width - 2
 	if innerWidth < 16 {
@@ -179,7 +206,7 @@ func (m Model) View() string {
 // error hint for text that doesn't parse as a cord.
 func (m Model) previewLine() string {
 	if m.input.Value() == "" {
-		return previewStyle.Render("Enter shorthand (2d, 2b, 1w) or a date")
+		return previewStyle.Render("Enter shorthand (0, 2d, 2b, 1w) or a date")
 	}
 	if resolved, ok := m.Resolved(); ok {
 		return previewStyle.Render(resolved.Format(previewLayout))
@@ -189,9 +216,14 @@ func (m Model) previewLine() string {
 
 // topBorder builds the box's top edge with the title embedded on the left
 // and the key-binding hint embedded on the right, lazygit-style, matching
-// the addform package's box styling.
+// the addform package's box styling. The corner/fill characters are
+// explicitly colored with borderColor (via lineStyle) rather than left
+// unstyled, so the top edge matches the colored sides/bottom border drawn
+// by bodyStyle instead of appearing as a differently-colored (uncolored)
+// segment.
 func (m Model) topBorder(innerWidth int) string {
 	border := lipgloss.RoundedBorder()
+	lineStyle := lipgloss.NewStyle().Foreground(borderColor)
 
 	titleRendered := " " + titleStyle.Render(title) + " "
 	hint := " " + hintStyle.Render(hintText) + " "
@@ -202,7 +234,9 @@ func (m Model) topBorder(innerWidth int) string {
 		fillWidth = 1
 	}
 
-	return border.TopLeft + titleRendered + strings.Repeat(border.Top, fillWidth) + hint + border.TopRight
+	return lineStyle.Render(border.TopLeft) + titleRendered +
+		lineStyle.Render(strings.Repeat(border.Top, fillWidth)) + hint +
+		lineStyle.Render(border.TopRight)
 }
 
 // flexibleDateSeparators are the separators accepted between the
