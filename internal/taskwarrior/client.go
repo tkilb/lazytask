@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 // TaskReader provides read-only access to Taskwarrior tasks.
@@ -15,11 +17,41 @@ type TaskReader interface {
 }
 
 // Client wraps the Taskwarrior CLI binary for executing operations.
+//
+// mu serializes every `task` subprocess invocation made through this
+// Client (see run/Export/Import/Sync/SyncBackground), including reads.
+// lazytask issues several independent tea.Cmds concurrently (e.g. a
+// mutation's own command alongside the tasks/projects/tags refresh it
+// triggers, or a background auto-sync tick landing mid-mutation), and
+// Taskwarrior's newer SQLite-backed replica storage (task 3.x, used by
+// the git-sync backend) does not tolerate concurrent processes touching
+// the same data directory — concurrent invocations intermittently fail
+// with "database is locked: Error code 5: database is locked". A single
+// mutex per Client (there is exactly one shared Client instance for the
+// whole app, see main.go) fully serializes lazytask's own `task` calls
+// and eliminates that class of failure; it does not protect against a
+// *different* process (e.g. a manual `task` invocation in another
+// terminal) writing concurrently, which is an inherent limitation of
+// Taskwarrior's own locking, not something lazytask can solve on its own.
+//
+// bgSyncMu/bgSyncCancel/bgSyncWG support SyncBackground's preemption: an
+// in-flight automatic sync (periodic tick or on-mutation debounce) must
+// never make a foreground, user-facing call wait for its full network
+// round-trip. Every foreground method (run/Export/Import/Sync) calls
+// preemptBackgroundSync first, which cancels SyncBackground's context —
+// exec.CommandContext kills the underlying `task sync` subprocess as soon
+// as that happens, freeing mu within milliseconds instead of however long
+// the sync had left. See preemptBackgroundSync and SyncBackground.
 type Client struct {
 	binary   string
 	taskData string
 	taskRC   string
 	environ  []string
+	mu       sync.Mutex
+
+	bgSyncMu     sync.Mutex
+	bgSyncCancel context.CancelFunc
+	bgSyncWG     sync.WaitGroup
 }
 
 // ClientOption configures a Client instance.
@@ -184,6 +216,82 @@ const syncNotConfiguredMarker = "No sync.* settings are configured"
 // a multi-line crash dump. Sync strips those lines and gives the common
 // "not configured" case its own plain-English message instead.
 func (c *Client) Sync(ctx context.Context, secret string) error {
+	c.preemptBackgroundSync()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.doSync(ctx, secret)
+}
+
+// SyncBackground runs `task sync` the same way Sync does, but is intended
+// for lazytask's own automatic triggers (the periodic timer and the
+// on-mutation debounce) rather than the user-initiated "S" key. Unlike
+// Sync, it is preemptible: every foreground Client call
+// (run/Export/Import/Sync) calls preemptBackgroundSync before doing its
+// own work, which cancels this call's context — exec.CommandContext kills
+// the underlying `task sync` subprocess as soon as that happens, so a
+// foreground call never waits for a slow or unreachable git remote's full
+// round-trip, only however long the subprocess takes to die (typically
+// milliseconds). Callers should treat the resulting context.Canceled
+// error as "skipped this cycle" rather than a real sync failure worth
+// surfacing to the user.
+//
+// See AwaitBackgroundSync for letting a call already in flight finish on
+// its own instead of being preempted (used on quit).
+func (c *Client) SyncBackground(ctx context.Context, secret string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	c.bgSyncMu.Lock()
+	c.bgSyncCancel = cancel
+	c.bgSyncMu.Unlock()
+	c.bgSyncWG.Add(1)
+	defer func() {
+		c.bgSyncMu.Lock()
+		c.bgSyncCancel = nil
+		c.bgSyncMu.Unlock()
+		c.bgSyncWG.Done()
+	}()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.doSync(ctx, secret)
+}
+
+// AwaitBackgroundSync blocks until a SyncBackground call currently in
+// flight finishes on its own, or timeout elapses, whichever comes first.
+// It returns immediately (a no-op) if no background sync is running.
+// Intended for use only when the app is quitting (see main.go's quit
+// handling), so a sync that's already under way gets a bounded chance to
+// reach the remote instead of always being killed outright by exiting.
+func (c *Client) AwaitBackgroundSync(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		c.bgSyncWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+}
+
+// preemptBackgroundSync cancels a SyncBackground call currently in
+// flight, if any, so the foreground call about to run doesn't have to
+// wait behind it — see SyncBackground's doc comment. Safe to call even
+// when no background sync is running.
+func (c *Client) preemptBackgroundSync() {
+	c.bgSyncMu.Lock()
+	cancel := c.bgSyncCancel
+	c.bgSyncMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// doSync runs `task sync` with ctx/secret and translates its result,
+// assuming the caller already holds c.mu. Shared by Sync and
+// SyncBackground.
+func (c *Client) doSync(ctx context.Context, secret string) error {
 	args := []string{"rc.confirmation=off"}
 	if secret != "" {
 		args = append(args, "rc.sync.encryption_secret="+secret)
@@ -196,8 +304,17 @@ func (c *Client) Sync(ctx context.Context, secret string) error {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err == nil {
+	err := cmd.Run()
+	if err == nil {
 		return nil
+	}
+	// A cancelled ctx (e.g. SyncBackground preempted by a foreground call,
+	// see preemptBackgroundSync) kills the subprocess before it can
+	// produce any meaningful stderr — surface ctx.Err() itself (typically
+	// context.Canceled) rather than the generic message below, so callers
+	// like runAutoSync can tell "preempted" apart from a real failure.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 
 	msg := cleanSyncStderr(stderr.String())
@@ -245,7 +362,11 @@ func (c *Client) Export(ctx context.Context, filters ...string) ([]Task, error) 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	c.preemptBackgroundSync()
+	c.mu.Lock()
+	err := cmd.Run()
+	c.mu.Unlock()
+	if err != nil {
 		stderrMsg := strings.TrimSpace(stderr.String())
 		if stderrMsg != "" {
 			return nil, fmt.Errorf("task export failed (%w): %s", err, stderrMsg)

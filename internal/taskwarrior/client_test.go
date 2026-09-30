@@ -2,10 +2,12 @@ package taskwarrior
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -253,7 +255,155 @@ func TestClient_Sync_SecretNeverPersistedToTaskRC(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(got), "secret must never be persisted via `task config`")
 }
 
+// TestClient_ConcurrentInvocations_NoDatabaseLocked is a regression test
+// for a "database is locked: Error code 5: database is locked" failure
+// users hit intermittently: lazytask fires several independent tea.Cmds
+// (e.g. a mutation alongside the tasks/projects/tags refresh it triggers,
+// an auto-sync tick landing mid-mutation, or two mutations racing) against
+// the same shared *Client, and Taskwarrior's SQLite-backed replica storage
+// does not tolerate concurrent processes touching one data directory.
+// Client.mu (see its doc comment) serializes every subprocess this Client
+// spawns.
+//
+// Confirmed directly while building this fix: with c.mu's Lock/Unlock
+// temporarily stripped, this exact scenario (concurrent Add/Sync against a
+// git-sync-configured replica) reliably produced 30+ failures per run,
+// including literal "database is locked: Error code 5: database is
+// locked" errors; with the mutex restored, 0 failures across repeated
+// runs. git-sync is included deliberately (not just Export/Add) since
+// that's what made the failure reproduce reliably locally — reads/writes
+// alone rarely triggered it within a short-running test.
+func TestClient_ConcurrentInvocations_NoDatabaseLocked(t *testing.T) {
+	if _, err := exec.LookPath("task"); err != nil {
+		t.Skip("task CLI not found in PATH; skipping integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH; skipping integration test")
+	}
+
+	tempDir := t.TempDir()
+	taskRC := filepath.Join(tempDir, ".taskrc")
+	taskData := filepath.Join(tempDir, "data")
+	require.NoError(t, os.WriteFile(taskRC, []byte("confirmation=off\n"), 0600))
+
+	remoteDir := filepath.Join(tempDir, "remote.git")
+	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+
+	client := NewClient(WithTaskData(taskData), WithTaskRC(taskRC))
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	require.NoError(t, client.ApplyGitSyncConfig(ctx, GitSyncConfig{
+		LocalPath: filepath.Join(tempDir, "gitclone"),
+		Branch:    "main",
+		Remote:    remoteDir,
+	}))
+	const secret = "test-only-encryption-secret-value"
+
+	const workers = 10
+	const itersPerWorker = 3
+	var wg sync.WaitGroup
+	errs := make(chan error, workers*itersPerWorker*2)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < itersPerWorker; j++ {
+				if _, err := client.Add(ctx, fmt.Sprintf("concurrent task %d-%d", i, j)); err != nil {
+					errs <- err
+				}
+				if err := client.Sync(ctx, secret); err != nil {
+					errs <- err
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		assert.NoError(t, err)
+	}
+}
+
 func TestCleanSyncStderr(t *testing.T) {
 	raw := "TASKRC override: /tmp/.taskrc\nTASKDATA override: /tmp/data\nConfiguration override rc.confirmation=off\nSomething actually useful.\n"
 	assert.Equal(t, "Something actually useful.", cleanSyncStderr(raw))
+}
+
+// fakeTaskBinary writes a tiny shell script standing in for the real
+// `task` CLI: any invocation whose args include "sync" sleeps for delay
+// before exiting 0 (simulating a slow/unreachable git remote); every
+// other invocation just prints "[]" (a valid, empty `task export` result)
+// and exits immediately. Returns the script's path.
+func fakeTaskBinary(t *testing.T, delay time.Duration) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "task")
+	script := fmt.Sprintf("#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"sync\" ]; then\n    sleep %f\n    exit 0\n  fi\ndone\necho '[]'\nexit 0\n", delay.Seconds())
+	require.NoError(t, os.WriteFile(path, []byte(script), 0755))
+	return path
+}
+
+// TestClient_SyncBackground_PreemptedByForegroundCall verifies the
+// mechanism behind Hypothesis 1's fix: a foreground call (Export) issued
+// while a SyncBackground is in flight against a slow "remote" doesn't
+// wait for that sync's full duration — it preempts (cancels) the
+// background sync and returns almost immediately instead.
+func TestClient_SyncBackground_PreemptedByForegroundCall(t *testing.T) {
+	const slowSyncDelay = 5 * time.Second
+	client := NewClient(WithBinary(fakeTaskBinary(t, slowSyncDelay)))
+	ctx := context.Background()
+
+	bgDone := make(chan error, 1)
+	go func() {
+		bgDone <- client.SyncBackground(ctx, "")
+	}()
+
+	// Give SyncBackground a moment to acquire c.mu and start "sleeping".
+	time.Sleep(200 * time.Millisecond)
+
+	start := time.Now()
+	_, err := client.Export(ctx)
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	assert.Less(t, elapsed, 2*time.Second,
+		"Export should be preempt the in-flight background sync rather than wait out its full %s delay", slowSyncDelay)
+
+	select {
+	case bgErr := <-bgDone:
+		assert.ErrorIs(t, bgErr, context.Canceled, "preempted SyncBackground should report context.Canceled")
+	case <-time.After(2 * time.Second):
+		t.Fatal("SyncBackground did not return after being preempted")
+	}
+}
+
+// TestClient_AwaitBackgroundSync_WaitsForInFlightSync verifies
+// AwaitBackgroundSync lets an in-flight SyncBackground finish on its own
+// (used on quit) rather than returning immediately, up to its timeout.
+func TestClient_AwaitBackgroundSync_WaitsForInFlightSync(t *testing.T) {
+	const syncDelay = 300 * time.Millisecond
+	client := NewClient(WithBinary(fakeTaskBinary(t, syncDelay)))
+	ctx := context.Background()
+
+	bgDone := make(chan error, 1)
+	go func() {
+		bgDone <- client.SyncBackground(ctx, "")
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	start := time.Now()
+	client.AwaitBackgroundSync(5 * time.Second)
+	elapsed := time.Since(start)
+
+	assert.GreaterOrEqual(t, elapsed, syncDelay/2, "AwaitBackgroundSync returned suspiciously fast for a sync still in flight")
+	require.NoError(t, <-bgDone)
+}
+
+// TestClient_AwaitBackgroundSync_NoOpWhenIdle verifies AwaitBackgroundSync
+// returns immediately when no background sync is running.
+func TestClient_AwaitBackgroundSync_NoOpWhenIdle(t *testing.T) {
+	client := NewClient()
+	start := time.Now()
+	client.AwaitBackgroundSync(5 * time.Second)
+	assert.Less(t, time.Since(start), 500*time.Millisecond)
 }

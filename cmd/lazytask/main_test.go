@@ -190,18 +190,31 @@ func (s *stubAnnotator) Annotate(ctx context.Context, id, text string) error {
 	return s.err
 }
 
-// stubSyncer is a test double for TaskSyncer, avoiding any real `task`
-// process invocation.
+// stubSyncer is a test double for TaskFullSyncer, avoiding any real
+// `task` process invocation. SyncBackground shares Sync's bookkeeping
+// (call/secrets) so existing tests that only cared about manual Sync
+// continue to work unchanged for the automatic paths too; AwaitBackgroundSync
+// is a no-op since the stub's "sync" is already synchronous — there's
+// never anything in flight left to wait for.
 type stubSyncer struct {
-	err     error
-	call    int
-	secrets []string
+	err         error
+	call        int
+	secrets     []string
+	awaitCalled bool
 }
 
 func (s *stubSyncer) Sync(ctx context.Context, secret string) error {
 	s.call++
 	s.secrets = append(s.secrets, secret)
 	return s.err
+}
+
+func (s *stubSyncer) SyncBackground(ctx context.Context, secret string) error {
+	return s.Sync(ctx, secret)
+}
+
+func (s *stubSyncer) AwaitBackgroundSync(timeout time.Duration) {
+	s.awaitCalled = true
 }
 
 // runBatch executes cmd, and if it returns a tea.BatchMsg (e.g. from
@@ -362,6 +375,26 @@ func TestModelUpdate_Quit(t *testing.T) {
 			assert.True(t, isQuit)
 		})
 	}
+}
+
+// TestModelUpdate_Quit_AwaitsInFlightBackgroundSync verifies quitting
+// gives an in-flight background sync a chance to finish (see
+// TaskSyncSettler) before actually telling Bubble Tea to exit, rather
+// than cutting it off the way a foreground call's preemption would.
+func TestModelUpdate_Quit_AwaitsInFlightBackgroundSync(t *testing.T) {
+	syncer := &stubSyncer{}
+	m := model{list: tasklist.New(nil), syncer: syncer}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	mm, ok := newModel.(model)
+	require.True(t, ok)
+	assert.True(t, mm.quitting)
+	require.NotNil(t, cmd)
+
+	res := cmd()
+	_, isQuit := res.(tea.QuitMsg)
+	assert.True(t, isQuit)
+	assert.True(t, syncer.awaitCalled, "quitting should call AwaitBackgroundSync before quitting")
 }
 
 func TestModelView(t *testing.T) {

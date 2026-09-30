@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -190,7 +191,9 @@ var tagsLocalBindings = []statusbar.Binding{
 // shown only on the Done/Deleted tabs (labeled "reopen" on Done, "restore"
 // on Deleted), and "x" is relabeled "purge" on the Deleted tab since it
 // becomes an irreversible permanent delete there, matching the actual key
-// handling in Update.
+// handling in Update. "X" ("purge all") is only shown on the Deleted tab,
+// matching its X-key handling in Update, which is a no-op on every other
+// tab.
 func (m model) statusBindings() []statusbar.Binding {
 	bindings := make([]statusbar.Binding, 0, len(globalBindings)+len(tasksLocalBindings)+1)
 	bindings = append(bindings, globalBindings...)
@@ -209,6 +212,7 @@ func (m model) statusBindings() []statusbar.Binding {
 			bindings = append(bindings, statusbar.Binding{Key: "r", Label: "reopen"})
 		case tasklist.TabDeleted:
 			bindings = append(bindings, statusbar.Binding{Key: "r", Label: "restore"})
+			bindings = append(bindings, statusbar.Binding{Key: "X", Label: "purge all"})
 		}
 	}
 	if m.focus == focusProjects {
@@ -311,6 +315,36 @@ type TaskSyncer interface {
 	Sync(ctx context.Context, secret string) error
 }
 
+// TaskBackgroundSyncer is the subset of the taskwarrior client needed to
+// run lazytask's own automatic `task sync` triggers (the periodic timer
+// and the on-mutation debounce), as opposed to the user-initiated "S" key
+// (see TaskSyncer). Unlike TaskSyncer.Sync, SyncBackground is preemptible:
+// any foreground Client call cancels an in-flight SyncBackground
+// immediately, so an automatic sync reaching a slow or unreachable git
+// remote never makes user-facing actions wait behind it — see
+// taskwarrior.Client.SyncBackground.
+type TaskBackgroundSyncer interface {
+	SyncBackground(ctx context.Context, secret string) error
+}
+
+// TaskSyncSettler lets lazytask wait, with a bound, for an in-flight
+// background sync (see TaskBackgroundSyncer) to finish on its own before
+// the program actually exits, instead of always cutting it off — see the
+// "q"/"ctrl+c" handling in Update.
+type TaskSyncSettler interface {
+	AwaitBackgroundSync(timeout time.Duration)
+}
+
+// TaskFullSyncer is everything lazytask's sync-related code paths need
+// from the underlying client: manual sync, automatic preemptible
+// background sync, and the ability to wait briefly for an in-flight
+// background sync on quit.
+type TaskFullSyncer interface {
+	TaskSyncer
+	TaskBackgroundSyncer
+	TaskSyncSettler
+}
+
 // tasksLoadedMsg carries the result of a successful task fetch.
 type tasksLoadedMsg struct {
 	tasks []taskwarrior.Task
@@ -402,6 +436,21 @@ type taskPurgedMsg struct {
 
 // taskPurgeErrMsg carries the error from a failed Purge call.
 type taskPurgeErrMsg struct {
+	err error
+}
+
+// tasksPurgedMsg carries the result of a successful bulk purge (see
+// purgeAllTasks), plus the combined undo.Action that reverses all of them
+// at once by re-importing every purged task's pre-purge snapshot.
+type tasksPurgedMsg struct {
+	action undo.Action
+}
+
+// tasksPurgeErrMsg carries the error from a failed bulk purge call. Note:
+// if one or more tasks were already permanently purged before the failing
+// one, those are NOT automatically rolled back — this mirrors taskPurgeErrMsg's
+// single-task error handling (no partial-failure recovery attempted here).
+type tasksPurgeErrMsg struct {
 	err error
 }
 
@@ -584,7 +633,7 @@ type model struct {
 	duer             TaskDueSetter
 	projecter        TaskProjectSetter
 	annotator        TaskAnnotator
-	syncer           TaskSyncer
+	syncer           TaskFullSyncer
 	syncSecretFile   string
 	autoSyncInterval time.Duration
 	lastAutoSyncErr  error
@@ -594,6 +643,7 @@ type model struct {
 	adding           bool
 	deleting         bool
 	purging          bool
+	purgingAll       bool
 	completing       bool
 	restoring        bool
 	renaming         bool
@@ -1152,6 +1202,54 @@ func purgeTask(purger TaskPurger, importer TaskImporter, task taskwarrior.Task) 
 	}
 }
 
+// purgeAllTasks returns a tea.Cmd that permanently removes every task in
+// tasks via purger, mirroring purgeTask but batched: all tasks' full field
+// sets are captured as a single combined JSON snapshot (a JSON array) up
+// front, and the resulting undo.Action's Undo re-creates every task in one
+// `task import` call (same UUIDs, so they slot back in as the same tasks)
+// rather than relying on Taskwarrior itself, which offers no way to
+// recover a purged task.
+//
+// tasks is purged in order; if a Purge call fails partway through, the
+// tasks purged before the failure are NOT rolled back automatically — this
+// is a core routine only (see PLAN.md's "Purge all" chunking plan); the
+// confirmation UI and any partial-failure messaging land in a later chunk.
+//
+// Returns a nil tea.Cmd if tasks is empty, since there is nothing to purge
+// or to build an undo action around.
+func purgeAllTasks(purger TaskPurger, importer TaskImporter, tasks []taskwarrior.Task) tea.Cmd {
+	if len(tasks) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		snapshot, err := json.Marshal(tasks)
+		if err != nil {
+			return tasksPurgeErrMsg{err: err}
+		}
+		ids := make([]string, len(tasks))
+		for i, t := range tasks {
+			ids[i] = taskID(t)
+		}
+		for _, id := range ids {
+			if err := purger.Purge(context.Background(), id); err != nil {
+				return tasksPurgeErrMsg{err: err}
+			}
+		}
+		return tasksPurgedMsg{action: undo.Action{
+			Description: fmt.Sprintf("purge %d tasks", len(tasks)),
+			Undo:        func() error { return importer.Import(context.Background(), snapshot) },
+			Redo: func() error {
+				for _, id := range ids {
+					if err := purger.Purge(context.Background(), id); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		}}
+	}
+}
+
 // setPriorityTask returns a tea.Cmd that sets task's priority to priority
 // via prioritizer, returning an undo.Action that reverses it back to the
 // task's prior priority.
@@ -1310,6 +1408,26 @@ func runRedo(a undo.Action) tea.Cmd {
 	}
 }
 
+// quitSyncGracePeriod bounds how long quitCmd waits for an in-flight
+// background sync to finish on its own before quitting anyway.
+const quitSyncGracePeriod = 15 * time.Second
+
+// quitCmd returns a tea.Cmd that quits the program, but first gives any
+// in-flight background sync (see TaskBackgroundSyncer/runAutoSync) up to
+// quitSyncGracePeriod to finish reaching the remote on its own, rather
+// than always cutting it off outright the way a foreground call's
+// preemption would. If syncer is nil, doesn't implement
+// TaskSyncSettler, or no background sync is running, this quits
+// immediately.
+func quitCmd(syncer TaskFullSyncer) tea.Cmd {
+	return func() tea.Msg {
+		if syncer != nil {
+			syncer.AwaitBackgroundSync(quitSyncGracePeriod)
+		}
+		return tea.Quit()
+	}
+}
+
 // runSync returns a tea.Cmd that triggers a manual `task sync` run (see
 // the "S" key binding in Update). secretFile is passed through to
 // config.EnsureSyncSecret to resolve (generating on first use, if needed)
@@ -1348,14 +1466,20 @@ func autoSyncTick(interval time.Duration) tea.Cmd {
 // taskSyncedMsg/taskSyncErrMsg — see those types' docs for why: the
 // manual "S" path's popups must stay unchanged, while this quiet path
 // never shows a success popup and reports failure via the status line
-// only.
-func runAutoSync(syncer TaskSyncer, secretFile string) tea.Cmd {
+// only. Uses SyncBackground rather than Sync, so a foreground action can
+// preempt this call instead of waiting for it — see
+// TaskBackgroundSyncer's doc comment. A preempted (context.Canceled) run
+// is treated as a quiet skip rather than a reportable failure.
+func runAutoSync(syncer TaskBackgroundSyncer, secretFile string) tea.Cmd {
 	return func() tea.Msg {
 		secret, err := config.EnsureSyncSecret(secretFile)
 		if err != nil {
 			return autoSyncErrMsg{err: fmt.Errorf("preparing sync secret: %w", err)}
 		}
-		if err := syncer.Sync(context.Background(), secret); err != nil {
+		if err := syncer.SyncBackground(context.Background(), secret); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return autoSyncedMsg{}
+			}
 			return autoSyncErrMsg{err: err}
 		}
 		return autoSyncedMsg{}
@@ -1521,6 +1645,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.purging {
 		return m.updatePurging(msg)
 	}
+	if m.purgingAll {
+		return m.updatePurgingAll(msg)
+	}
 	if m.completing {
 		return m.updateCompleting(msg)
 	}
@@ -1567,7 +1694,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
-			return m, tea.Quit
+			return m, quitCmd(m.syncer)
 		case "0", "1", "2", "3", "4":
 			m = m.setFocus(panelKeyBindings[msg.String()])
 			return m, nil
@@ -1710,6 +1837,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.deleting = true
 				}
+			}
+			return m, nil
+		case "X":
+			// Bulk purge is only offered on the Deleted tab, mirroring
+			// how single-task "x" is only a permanent purge there; on
+			// every other tab this is simply not a bound key.
+			if m.list.Status() == tasklist.TabDeleted && len(m.list.Tasks()) > 0 {
+				m.purgingAll = true
 			}
 			return m, nil
 		case "e":
@@ -1860,6 +1995,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case taskPurgeErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case tasksPurgedMsg:
+		m.undo.Push(msg.action)
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+	case tasksPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPrioritySetMsg:
@@ -2026,6 +2167,25 @@ func (m model) updatePurging(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, purgeTask(m.purger, m.importer, task)
 		case "n", "esc":
 			m.purging = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// updatePurgingAll handles messages while a bulk-purge ("X") confirmation
+// is pending. Same irreversible-in-Taskwarrior/undoable-via-lazytask
+// tradeoff as updatePurging, but operating on every task currently visible
+// on the Deleted tab (see purgeAllTasks) rather than just the selection.
+func (m model) updatePurgingAll(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "enter":
+			m.purgingAll = false
+			return m, purgeAllTasks(m.purger, m.importer, m.list.Tasks())
+		case "n", "esc":
+			m.purgingAll = false
 			return m, nil
 		}
 	}
@@ -2553,6 +2713,16 @@ func (m model) View() string {
 			text := fmt.Sprintf("Permanently delete %q? This cannot be undone.", task.Description)
 			view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
 		}
+	}
+
+	if m.purgingAll {
+		n := len(m.list.Tasks())
+		noun := "tasks"
+		if n == 1 {
+			noun = "task"
+		}
+		text := fmt.Sprintf("Permanently delete all %d deleted %s? This cannot be undone.", n, noun)
+		view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
 	}
 
 	if m.completing {

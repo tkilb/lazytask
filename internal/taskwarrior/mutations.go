@@ -30,7 +30,11 @@ type TaskMutator interface {
 var createdTaskRE = regexp.MustCompile(`Created task (\d+)\.`)
 
 // run executes `task` with the given arguments, using the client's
-// environment overrides, and returns combined stdout/stderr.
+// environment overrides, and returns combined stdout/stderr. Serialized via
+// c.mu (see Client's doc comment) so lazytask never has two `task`
+// processes touching the data directory at once. Calls
+// preemptBackgroundSync first so an in-flight automatic sync never makes
+// this foreground call wait for its full duration.
 func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.binary, args...)
 	cmd.Env = c.buildEnv()
@@ -39,7 +43,11 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	c.preemptBackgroundSync()
+	c.mu.Lock()
+	err := cmd.Run()
+	c.mu.Unlock()
+	if err != nil {
 		stderrMsg := strings.TrimSpace(stderr.String())
 		if stderrMsg != "" {
 			return "", fmt.Errorf("task %s failed (%w): %s", strings.Join(args, " "), err, stderrMsg)
@@ -198,7 +206,11 @@ func (c *Client) Import(ctx context.Context, data []byte) error {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	c.preemptBackgroundSync()
+	c.mu.Lock()
+	err := cmd.Run()
+	c.mu.Unlock()
+	if err != nil {
 		stderrMsg := strings.TrimSpace(stderr.String())
 		if stderrMsg != "" {
 			return fmt.Errorf("task import failed (%w): %s", err, stderrMsg)

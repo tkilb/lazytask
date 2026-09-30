@@ -184,6 +184,18 @@ func effectiveUrgency(t taskwarrior.Task) float64 {
 	return t.Urgency + t.UrgencyOffset
 }
 
+// Tasks returns every task currently in the list, in its current sorted
+// order — i.e. the full filtered set for the active status tab (already
+// narrowed by whatever status/project/tag filters produced it), not just
+// the one under the cursor. Used by bulk actions (e.g. "purge all deleted
+// tasks") that operate on everything visible rather than a single
+// selection. The returned slice is a copy; mutating it does not affect m.
+func (m Model) Tasks() []taskwarrior.Task {
+	tasks := make([]taskwarrior.Task, len(m.tasks))
+	copy(tasks, m.tasks)
+	return tasks
+}
+
 // Selected returns the currently selected task and true, or a zero Task and
 // false if the list is empty.
 func (m Model) Selected() (taskwarrior.Task, bool) {

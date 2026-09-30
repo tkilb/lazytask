@@ -133,6 +133,30 @@ than a human would spend minutes:
   **Status: chunks 1–4 committed. History purge routine and auto-sync are
   both fully designed/decided (see below) but have no code written yet —
   awaiting sign-off to start the first chunk of either.**
+  - 🐛 **Bug fix, 2026-09-30 (uncommitted) — intermittent "database is
+    locked: Error code 5: database is locked" popup.** Root cause:
+    `internal/taskwarrior.Client` had no serialization at all — every
+    method (`Export`, `Add`, `Done`, `Delete`, `Purge`, `Import`,
+    `SetPriority`/`SetDue`/`SetProject`/etc. via the shared `run()`
+    helper, and `Sync`) spawned its own independent `task` subprocess, and
+    lazytask routinely fires several of these concurrently as sibling
+    `tea.Cmd`s (e.g. a mutation alongside the tasks/projects/tags refresh
+    it triggers, an auto-sync tick landing mid-mutation, or two mutations
+    racing). Taskwarrior 3.x's SQLite-backed replica storage does not
+    tolerate concurrent processes touching one data directory. Fix: added
+    a `sync.Mutex` field to `Client` (there is exactly one shared instance
+    for the whole app) and serialized every subprocess invocation through
+    it. Confirmed directly while building the fix: with the lock
+    temporarily stripped, a concurrent Add+Sync stress test against a
+    git-sync-configured replica reliably produced 30+ failures per run
+    (including literal "database is locked" errors); restoring the lock
+    dropped that to 0 across repeated runs. Covered by
+    `internal/taskwarrior.TestClient_ConcurrentInvocations_NoDatabaseLocked`
+    (skips if `task`/`git` aren't on `PATH`, like the package's other
+    integration tests). Known limitation documented in `Client`'s comment:
+    this only serializes lazytask's own `task` calls — it can't prevent a
+    *different*, unrelated `task` process (e.g. a manual invocation in
+    another terminal) from racing Taskwarrior's own locking.
   - ✅ **Chunk 1 — Sync config plumbing.** `internal/config.GitSyncConfig` +
     `LoadGitSyncConfig()` read `sync.git.*` from a fixed, hand-editable
     `~/.config/lazytask/config.yaml` (same path on every OS, incl. Arch
@@ -430,9 +454,61 @@ shipped). Human requested this instead run automatically so devices that
     shrank from 64 to 52 cols. `addform`'s equivalent constants were left
     untouched (not requested), so its 60/64 are still literals sized by
     hand-computed length in the earlier chunk above.
-- [ ] **Purge all** — bulk-purge action for tasks (needs scope/safety
-      clarification before chunking — see Section 5's ask-before-assuming
-      rule).
+- [x] **Purge all** — bulk-purge action for tasks. **Scope/safety decided
+      2026-09-30 (human sign-off), no code written yet:**
+  - **Scope**: operates only on tasks currently visible on the Deleted tab
+    under the active project/tag filters (same filtered set the list panel
+    is already showing) — not every deleted task in taskwarrior regardless
+    of filters.
+  - **Keybinding**: `X` (Shift+x), active only while focused on the
+    Deleted tab, mirroring how lowercase `x` is already relabeled "purge"
+    there. Distinct from the existing per-task `x`/"purge" key, which
+    stays unchanged.
+  - **Confirmation**: a popup that states the exact count of tasks about
+    to be purged and requires an explicit confirm keypress (not a bare
+    single-key y/n, and not a typed "purge" phrase — count-and-confirm
+    only).
+  - **Undo**: one combined undo action restores every purged task at once
+    (single entry on lazytask's undo stack), analogous to `purgeTask`'s
+    per-task snapshot+re-import but batched into one `undo.Action`.
+  - **Proposed chunking plan**:
+    1. ✅ **Bulk purge core routine (done, uncommitted)** — `purgeAllTasks`
+       (`cmd/lazytask/main.go`) takes the current filtered Deleted-tab task
+       set, captures one combined JSON-array snapshot up front, calls
+       `TaskPurger.Purge` per task (in order), and returns a single
+       combined `tasksPurgedMsg`/`undo.Action` (or `tasksPurgeErrMsg` on
+       failure; a nil `tea.Cmd` if the task set is empty). Undo re-imports
+       the whole batch in one `Import` call; Redo re-purges every task.
+       Documented limitation: a mid-batch Purge failure is not rolled
+       back (no compensating un-purge of tasks already removed) — this
+       core routine has no confirmation UI/keybinding wiring yet, so it's
+       not reachable from the running app. Covered by
+       `cmd/lazytask/bulkpurge_test.go`
+       (`TestPurgeAllTasks_EmptyIsNoOp`,
+       `TestPurgeAllTasks_PurgesEveryTaskAndBuildsUndo`,
+       `TestPurgeAllTasks_PurgeErrorReturnsErrMsg`,
+       `TestPurgeAllTasks_FallsBackToNumericIDWhenUUIDMissing`).
+    2. ✅ **Confirmation popup + keybinding wiring (done, uncommitted)** —
+       `X` (only on the Deleted tab, no-op elsewhere/when empty) arms a new
+       `purgingAll` model flag; `y`/`enter` dispatches `purgeAllTasks` over
+       every task the (filtered) list currently holds, `n`/`esc` cancels.
+       Confirmation popup (`popup.DangerConfirmBox`) states the exact
+       count ("Permanently delete all N deleted tasks? This cannot be
+       undone.", singular "task" for N=1). `tasksPurgedMsg`/
+       `tasksPurgeErrMsg` wired into `Update` identically to the
+       single-task purge path (push undo action + refresh tasks/projects/
+       tags/auto-sync, or show an error popup). Status bar shows an
+       `X`/"purge all" hint only on the Deleted tab. Needed one small
+       addition to `internal/ui/tasklist`: a new `Model.Tasks()` accessor
+       returning the full current (already status/project/tag-filtered)
+       task slice, since bulk actions need more than just the cursor's
+       selection. Covered by 11 new tests in
+       `cmd/lazytask/bulkpurge_test.go` (keybinding gating on tab/
+       emptiness, confirm/cancel, refresh-on-success, error-on-failure,
+       exact-count popup text incl. singular noun, status-bar hint
+       gating).
+    3. *(Not needed — chunks 1+2 together stayed within the bounded
+       diff-size rule in Section 6; "Purge all" is now fully implemented.)*
 - [ ] **Keyboard hints popup via `?`** — a help overlay listing current key
       bindings.
       lets have a conversation of which keys show and which must be referenced via the help popup
