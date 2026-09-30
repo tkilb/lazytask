@@ -133,7 +133,6 @@ than a human would spend minutes:
   **Status: chunks 1–4 committed. History purge routine and auto-sync are
   both fully designed/decided (see below) but have no code written yet —
   awaiting sign-off to start the first chunk of either.**
-
   - ✅ **Chunk 1 — Sync config plumbing.** `internal/config.GitSyncConfig` +
     `LoadGitSyncConfig()` read `sync.git.*` from a fixed, hand-editable
     `~/.config/lazytask/config.yaml` (same path on every OS, incl. Arch
@@ -151,12 +150,12 @@ than a human would spend minutes:
   - ✅ **Chunk 3 — Auto-managed, configurable encryption secret.** The
     secret is **never** written to Taskwarrior's own `.taskrc` — only
     passed as a one-off `rc.sync.encryption_secret=` override at `task
-    sync` time (verified via integration test). `config.EnsureSyncSecret`
+sync` time (verified via integration test). `config.EnsureSyncSecret`
     auto-generates one (32 random bytes, hex, `crypto/rand`) on first use
     and persists it at `~/.local/share/lazytask/sync-secret` (0600,
     deliberately outside `~/.config` so a dotfile manager tracking
     `config.yaml` won't sweep it up) unless overridden via `config.yaml`'s
-    `sync.git.encryption_secret_file` (a *path*, safe to dotfile-manage,
+    `sync.git.encryption_secret_file` (a _path_, safe to dotfile-manage,
     since it holds no secret material).
   - ✅ **Bugfix — `local_path` tilde expansion.** Taskwarrior's own `~`
     expansion of `sync.git.local_path` was observed to misresolve on
@@ -342,17 +341,38 @@ shipped). Human requested this instead run automatically so devices that
 
 ### Phase 6 — UX Enhancements
 
-- [ ] **Redo status bar, maybe rename to "suggested"** — revisit the status
-      bar's current design/labeling.
-- [ ] **Better tasklist column headers and date display** — improve column
-      header clarity and how due/other dates are formatted in the task list.
+- [x] **Better tasklist column headers and date display** — Due column now
+      shows a bare signed day-delta instead of the raw date (e.g. "2" = due
+      in two days, "0" = due today, "-1" = overdue by a day; no due date
+      renders as blank). Header label stays "Due" (decided 2026-09-30,
+      human's call — no rename needed). Colors: overdue → red
+      (`dueOverdueColor`), due today → bright orange 256-color
+      (`dueTodayColor`, code 208 — chosen since every base-16 color was
+      already spoken for by priority/search-match colors), due in 1 day →
+      yellow (`dueTomorrowColor`), due in 2+ days → green
+      (`dueLaterColor`). Implemented in `internal/ui/tasklist/model.go`
+      (`dueDeltaDays`/`formatDueCell`/`dueColor`), with a `Model.now`
+      field (default `time.Now`, overridable via `WithNow`, mirroring
+      `internal/ui/datepick`'s same pattern) so tests get deterministic
+      deltas. Covered by `TestDueDeltaDays`, `TestFormatDueCell`,
+      `TestDueColor`, `TestRenderDataRow_DueCellColoredByDelta`,
+      `TestModel_WithNow_UsedByView`.
+
+- [ ] **Quick Duedate update ** — shift D on a existing task will summon a popup
+      that uses the same duedate mechanism that add has.
 - [ ] **Purge all** — bulk-purge action for tasks (needs scope/safety
       clarification before chunking — see Section 5's ask-before-assuming
       rule).
 - [ ] **Keyboard hints popup via `?`** — a help overlay listing current key
       bindings.
+      lets have a conversation of which keys show and which must be referenced via the help popup
+
+Discussion for this:
+
 - [ ] **Funnel for adhoc tasks** — a quick-capture flow for one-off/adhoc
       tasks (needs scope clarification before chunking).
+- [ ] **Redo status bar, maybe rename to "suggested"** — revisit the status
+      bar's current design/labeling.
 
 ### Phase 7 — Tags (continuation)
 

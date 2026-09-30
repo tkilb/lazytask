@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -19,7 +21,7 @@ import (
 // process is ever invoked in this package.
 func sampleTasks() []taskwarrior.Task {
 	return []taskwarrior.Task{
-		{ID: 1, Description: "Buy groceries", Project: "Home", Priority: "H", Due: "2026-09-20"},
+		{ID: 1, Description: "Buy groceries", Project: "Home", Priority: "H", Due: "20260920T000000Z"},
 		{ID: 2, Description: "Write report", Project: "Work", Priority: "M"},
 		{ID: 3, Description: "Water plants", Project: "Home"},
 	}
@@ -308,12 +310,13 @@ func TestRenderDataRow_ColorsOnlyPriorityCell(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(termenv.Ascii)
 
-	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home", Priority: "H", Due: "2026-09-20"}
+	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home", Priority: "H", Due: "20260920T000000Z"}
 
-	row := renderDataRow(80, task, false, "")
+	row := renderDataRow(80, task, false, "", time.Now())
 
+	_, _, _, priorityWidth, _ := columnWidths(80)
 	priorityCell := lipgloss.NewStyle().Foreground(panel.PriorityHighColor).Render(
-		fmt.Sprintf("%-*s", 4, "H"),
+		fmt.Sprintf("%-*s", priorityWidth, "H"),
 	)
 	assert.Contains(t, row, priorityCell)
 
@@ -332,7 +335,7 @@ func TestRenderDataRow_HighlightsSearchMatchSubstringOnCursorRow(t *testing.T) {
 
 	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home"}
 
-	row := renderDataRow(80, task, true, "groc")
+	row := renderDataRow(80, task, true, "groc", time.Now())
 
 	// Even on the selected (bold) cursor row, the matched substring itself
 	// must never be bold.
@@ -347,7 +350,7 @@ func TestRenderDataRow_HighlightIsCaseInsensitive(t *testing.T) {
 
 	task := taskwarrior.Task{ID: 1, Description: "Buy Groceries", Project: "Home"}
 
-	row := renderDataRow(80, task, true, "groceries")
+	row := renderDataRow(80, task, true, "groceries", time.Now())
 
 	matchStyle := lipgloss.NewStyle().Background(panel.SelectedRowBackground).Bold(true).
 		Background(searchMatchColor).Foreground(lipgloss.Color("0")).Bold(false)
@@ -364,7 +367,7 @@ func TestRenderDataRow_HighlightUsesUnfocusedColorOnNonCursorRow(t *testing.T) {
 
 	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home"}
 
-	row := renderDataRow(80, task, false, "groc")
+	row := renderDataRow(80, task, false, "groc", time.Now())
 
 	focusedStyle := lipgloss.NewStyle().Background(searchMatchColor).Foreground(lipgloss.Color("0"))
 	unfocusedStyle := lipgloss.NewStyle().Background(searchMatchColorUnfocused).Foreground(lipgloss.Color("0"))
@@ -378,7 +381,7 @@ func TestRenderDataRow_NoQueryLeavesDescriptionUnstyled(t *testing.T) {
 
 	task := taskwarrior.Task{ID: 1, Description: "Buy groceries", Project: "Home"}
 
-	row := renderDataRow(80, task, false, "")
+	row := renderDataRow(80, task, false, "", time.Now())
 
 	// With no active search and no priority/selection styling, the row is
 	// plain text with no ANSI escape codes at all.
@@ -392,11 +395,167 @@ func TestRenderDataRow_CollapsesEmbeddedNewlinesInDescription(t *testing.T) {
 	// collapsed away rather than leaking a raw "\n" into the rendered row.
 	task := taskwarrior.Task{ID: 1, Description: "Buy groceries\nand also milk", Project: "Home"}
 
-	row := renderDataRow(80, task, false, "")
+	row := renderDataRow(80, task, false, "", time.Now())
 
 	assert.NotContains(t, row, "\n")
 	assert.Contains(t, row, "Buy groceries and also milk")
 }
+
+// TestRenderDataRow_MultiByteDescriptionKeepsLaterColumnsAligned is a
+// regression test: a Description containing a multi-byte UTF-8 rune (here
+// a curly apostrophe, U+2019, 3 bytes/1 rune) previously threw off
+// renderDescriptionCell's pad calculation, which used len() (byte count)
+// instead of utf8.RuneCountInString, under-padding the Description cell
+// and shifting every column after it left by the byte/rune delta. Project
+// must render at exactly the same column position regardless of whether
+// Description contains multi-byte characters.
+func TestRenderDataRow_MultiByteDescriptionKeepsLaterColumnsAligned(t *testing.T) {
+	plain := taskwarrior.Task{ID: 1, Description: "Investigate pricing and licensing", Project: "ccl"}
+	multiByte := taskwarrior.Task{ID: 1, Description: "Investigate Tolge\u2019s pricing and licensing", Project: "ccl"}
+
+	plainRow := renderDataRow(80, plain, false, "", time.Now())
+	multiByteRow := renderDataRow(80, multiByte, false, "", time.Now())
+
+	// byteIndexOf finds "ccl" and converts its byte offset to a rune
+	// (display-column) offset, since a curly apostrophe earlier in the
+	// row shifts the byte offset without moving the display column — the
+	// bug fixed here was specifically about display-column alignment, so
+	// the assertion must compare in rune terms, not raw bytes.
+	byteIndexOf := func(s string, byteIdx int) int {
+		require.GreaterOrEqual(t, byteIdx, 0)
+		return utf8.RuneCountInString(s[:byteIdx])
+	}
+	plainByteIdx := strings.Index(plainRow, "ccl")
+	multiByteByteIdx := strings.Index(multiByteRow, "ccl")
+	require.Greater(t, plainByteIdx, 0)
+	require.Greater(t, multiByteByteIdx, 0)
+	plainRuneIdx := byteIndexOf(plainRow, plainByteIdx)
+	multiByteRuneIdx := byteIndexOf(multiByteRow, multiByteByteIdx)
+	assert.Equal(t, plainRuneIdx, multiByteRuneIdx, "Project column must start at the same display column regardless of multi-byte characters in Description")
+}
+
+// localDue builds a taskDueLayout-formatted Due string for a task due at
+// local midnight on the given local calendar date, offsetDays days after
+// baseLocal. Constructing both the "now" reference and Due fixtures from
+// the same time.Local anchor (rather than hardcoding UTC clock times) is
+// what keeps these tests deterministic regardless of the test runner's
+// timezone, since dueDeltaDays compares local calendar dates.
+func localDue(baseLocal time.Time, offsetDays int) string {
+	return baseLocal.AddDate(0, 0, offsetDays).UTC().Format(taskDueLayout)
+}
+
+func TestDueDeltaDays(t *testing.T) {
+	now := time.Date(2026, time.September, 20, 15, 0, 0, 0, time.Local)
+	today := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.Local)
+
+	tests := []struct {
+		name      string
+		due       string
+		wantDays  int
+		wantFound bool
+	}{
+		{"empty due", "", 0, false},
+		{"unparseable due", "not-a-date", 0, false},
+		{"due today", localDue(today, 0), 0, true},
+		{"due tomorrow", localDue(today, 1), 1, true},
+		{"due in five days", localDue(today, 5), 5, true},
+		{"overdue by one day", localDue(today, -1), -1, true},
+		{"overdue by ten days", localDue(today, -10), -10, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			days, ok := dueDeltaDays(tc.due, now)
+			assert.Equal(t, tc.wantFound, ok)
+			if tc.wantFound {
+				assert.Equal(t, tc.wantDays, days)
+			}
+		})
+	}
+}
+
+func TestFormatDueCell(t *testing.T) {
+	today := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.Local)
+	now := today
+
+	text, ok := formatDueCell("", now)
+	assert.False(t, ok)
+	assert.Equal(t, "", text)
+
+	text, ok = formatDueCell(localDue(today, 0), now)
+	assert.True(t, ok)
+	assert.Equal(t, "0", text)
+
+	text, ok = formatDueCell(localDue(today, -1), now)
+	assert.True(t, ok)
+	assert.Equal(t, "-1", text)
+
+	text, ok = formatDueCell(localDue(today, 2), now)
+	assert.True(t, ok)
+	assert.Equal(t, "2", text)
+}
+
+func TestDueColor(t *testing.T) {
+	assert.Equal(t, dueOverdueColor, dueColor("-1"))
+	assert.Equal(t, dueOverdueColor, dueColor("-10"))
+	assert.Equal(t, dueTodayColor, dueColor("0"))
+	assert.Equal(t, dueTomorrowColor, dueColor("1"))
+	assert.Equal(t, dueLaterColor, dueColor("2"))
+	assert.Equal(t, dueLaterColor, dueColor("30"))
+}
+
+func TestRenderDataRow_DueCellColoredByDelta(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	today := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.Local)
+	now := today
+	_, _, _, _, dueWidth := columnWidths(80)
+
+	overdue := taskwarrior.Task{ID: 1, Description: "Overdue task", Due: localDue(today, -1)}
+	row := renderDataRow(80, overdue, false, "", now)
+	wantCell := lipgloss.NewStyle().Foreground(dueOverdueColor).Render(fmt.Sprintf("%*s", dueWidth, "-1"))
+	assert.Contains(t, row, wantCell)
+
+	dueTodayTask := taskwarrior.Task{ID: 2, Description: "Due today task", Due: localDue(today, 0)}
+	row = renderDataRow(80, dueTodayTask, false, "", now)
+	wantCell = lipgloss.NewStyle().Foreground(dueTodayColor).Render(fmt.Sprintf("%*s", dueWidth, "0"))
+	assert.Contains(t, row, wantCell)
+
+	tomorrow := taskwarrior.Task{ID: 3, Description: "Due tomorrow task", Due: localDue(today, 1)}
+	row = renderDataRow(80, tomorrow, false, "", now)
+	wantCell = lipgloss.NewStyle().Foreground(dueTomorrowColor).Render(fmt.Sprintf("%*s", dueWidth, "1"))
+	assert.Contains(t, row, wantCell)
+
+	later := taskwarrior.Task{ID: 4, Description: "Due later task", Due: localDue(today, 5)}
+	row = renderDataRow(80, later, false, "", now)
+	wantCell = lipgloss.NewStyle().Foreground(dueLaterColor).Render(fmt.Sprintf("%*s", dueWidth, "5"))
+	assert.Contains(t, row, wantCell)
+
+	noDue := taskwarrior.Task{ID: 5, Description: "No due date task"}
+	row = renderDataRow(80, noDue, false, "", now)
+	assert.NotContains(t, row, "\x1b[")
+}
+
+func TestModel_WithNow_UsedByView(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+
+	today := time.Date(2026, time.September, 20, 0, 0, 0, 0, time.Local)
+	fixedNow := today
+	tasks := []taskwarrior.Task{{ID: 1, Description: "Due tomorrow", Due: localDue(today, 1)}}
+	m := New(tasks).WithNow(func() time.Time { return fixedNow })
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	view := m.View()
+	_, _, _, _, dueWidth := columnWidths(78)
+	// Cursor starts on the only (and thus selected) task, so the expected
+	// style also carries the selected-row background/bold, matching how
+	// renderDataRow composes dueStyle from base when selected.
+	wantCell := lipgloss.NewStyle().Background(panel.SelectedRowBackground).Bold(true).
+		Foreground(dueTomorrowColor).Render(fmt.Sprintf("%*s", dueWidth, "1"))
+	assert.Contains(t, view, wantCell)
+}
+
 
 func TestSanitizeSingleLine_CollapsesNewlinesAndControlChars(t *testing.T) {
 	got := sanitizeSingleLine("line one\nline two\r\nline three\x07end")
