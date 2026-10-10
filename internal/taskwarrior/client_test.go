@@ -339,7 +339,7 @@ func TestCleanSyncStderr(t *testing.T) {
 func fakeTaskBinary(t *testing.T, delay time.Duration) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "task")
-	script := fmt.Sprintf("#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"sync\" ]; then\n    sleep %f\n    exit 0\n  fi\ndone\necho '[]'\nexit 0\n", delay.Seconds())
+	script := fmt.Sprintf("#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"sync\" ]; then\n    exec sleep %f\n  fi\ndone\necho '[]'\nexit 0\n", delay.Seconds())
 	require.NoError(t, os.WriteFile(path, []byte(script), 0755))
 	return path
 }

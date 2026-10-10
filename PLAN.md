@@ -198,6 +198,13 @@ sync` time (verified via integration test). `config.EnsureSyncSecret`
     permanently invalidates decryption of any history already pushed
     under the old secret and requires updating every other device sharing
     the sync repo.
+  - ✅ **Chunk 5 — Sync reset CLI subcommand.** `lazytask sync-reset [-y|--yes]`
+    provides a safe reset command that purges local SQLite database files
+    (`taskchampion.sqlite3*`) and the local git-sync clone directory,
+    then automatically runs a fresh `task sync` to pull down the true
+    remote task state without publishing/pushing any stale local history.
+    Prompts for confirmation unless `-y` / `--yes` is passed. Covered by
+    `cmd/lazytask/syncreset_test.go` and `internal/taskwarrior/reset_test.go`.
   - **Not yet done:** the history purge routine below, and the
     auto-sync feature described further below. Neither has any code
     written yet as of this update — decisions/design only.

@@ -3065,6 +3065,15 @@ func main() {
 		return
 	}
 
+	if isSyncResetArg(os.Args[1:]) {
+		client := taskwarrior.NewClient()
+		if err := runSyncReset(os.Stdin, os.Stdout, client, os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error resetting sync: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Use the alternate screen so the program owns the full terminal
 	// buffer. Without it, resuming after an external process (e.g. the
 	// editor launched by the 'e' key, via tea.ExecProcess) just repaints
