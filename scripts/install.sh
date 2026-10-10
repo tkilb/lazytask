@@ -61,6 +61,23 @@ trap 'rm -rf "$tmp_dir"' EXIT
 echo "Downloading $url..."
 curl -fsSL "$url" -o "$tmp_dir/$archive"
 
+echo "Verifying checksum..."
+curl -fsSL "https://github.com/${REPO}/releases/download/${tag}/checksums.txt" -o "$tmp_dir/checksums.txt"
+expected="$(awk -v f="$archive" '{n=$2; sub(/^\*/, "", n)} n == f {print $1}' "$tmp_dir/checksums.txt")"
+if [ -z "$expected" ]; then
+	echo "No checksum listed for $archive." >&2
+	exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+	actual="$(sha256sum "$tmp_dir/$archive" | awk '{print $1}')"
+else
+	actual="$(shasum -a 256 "$tmp_dir/$archive" | awk '{print $1}')"
+fi
+if [ "$expected" != "$actual" ]; then
+	echo "Checksum mismatch for $archive (expected $expected, got $actual)." >&2
+	exit 1
+fi
+
 echo "Extracting..."
 tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
 

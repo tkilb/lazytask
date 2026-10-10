@@ -2,7 +2,10 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -63,7 +66,9 @@ func runUpdate() error {
 	archiveName := fmt.Sprintf("lazytask_%s_%s_%s.tar.gz", latestVersion, runtime.GOOS, runtime.GOARCH)
 	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", updateRepo, latestTag, archiveName)
 
-	binaryData, err := downloadBinary(client, url, wantPath)
+	checksumsURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/checksums.txt", updateRepo, latestTag)
+
+	binaryData, err := downloadBinary(client, url, checksumsURL, archiveName, wantPath)
 	if err != nil {
 		return fmt.Errorf("downloading release: %w", err)
 	}
@@ -103,9 +108,8 @@ func latestReleaseTag(client *http.Client) (string, error) {
 	return release.TagName, nil
 }
 
-// downloadBinary fetches the release tarball at url and returns the
-// bytes of the entry at wantPath within it.
-func downloadBinary(client *http.Client, url, wantPath string) ([]byte, error) {
+// fetchBytes GETs url and returns the response body.
+func fetchBytes(client *http.Client, url string) ([]byte, error) {
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
@@ -115,8 +119,58 @@ func downloadBinary(client *http.Client, url, wantPath string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %s fetching %s", resp.Status, url)
 	}
+	return io.ReadAll(resp.Body)
+}
 
-	gz, err := gzip.NewReader(resp.Body)
+// expectedChecksum finds archiveName's SHA-256 in a `sha256sum`-style
+// checksums file ("<hex>  <name>" per line).
+func expectedChecksum(checksums []byte, archiveName string) (string, error) {
+	for _, line := range strings.Split(string(checksums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == archiveName {
+			return strings.ToLower(fields[0]), nil
+		}
+	}
+	return "", fmt.Errorf("no checksum listed for %s", archiveName)
+}
+
+// verifyChecksum returns an error unless data's SHA-256 matches want.
+func verifyChecksum(data []byte, want string) error {
+	sum := sha256.Sum256(data)
+	if got := hex.EncodeToString(sum[:]); got != want {
+		return fmt.Errorf("checksum mismatch: got %s, want %s", got, want)
+	}
+	return nil
+}
+
+// downloadBinary fetches the release tarball at url, verifies it against
+// the checksums file at checksumsURL, and returns the bytes of the entry
+// at wantPath within it.
+func downloadBinary(client *http.Client, url, checksumsURL, archiveName, wantPath string) ([]byte, error) {
+	archive, err := fetchBytes(client, url)
+	if err != nil {
+		return nil, err
+	}
+
+	checksums, err := fetchBytes(client, checksumsURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetching checksums: %w", err)
+	}
+	want, err := expectedChecksum(checksums, archiveName)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyChecksum(archive, want); err != nil {
+		return nil, err
+	}
+
+	return extractFromTarGz(archive, wantPath)
+}
+
+// extractFromTarGz returns the bytes of the entry at wantPath in a
+// gzipped tarball.
+func extractFromTarGz(archive []byte, wantPath string) ([]byte, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
 		return nil, err
 	}

@@ -51,6 +51,21 @@ if git rev-parse "v${new_version}" >/dev/null 2>&1; then
 	exit 1
 fi
 
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "${2:-}" != "-y" ] && [ "${2:-}" != "--yes" ] && [ "${RELEASE_YES:-}" != "1" ]; then
+	echo "About to release v${new_version} (current ${current}) from branch '${branch}':"
+	echo "  - commit VERSION bump, tag v${new_version}"
+	echo "  - push '${branch}' and tag v${new_version} to origin (triggers the Release workflow)"
+	read -r -p "Proceed? [y/N] " reply
+	case "$reply" in
+	y | Y | yes | YES) ;;
+	*)
+		echo "Aborted." >&2
+		exit 1
+		;;
+	esac
+fi
+
 echo "$new_version" >VERSION
 git add VERSION
 git commit -m "chore: release v${new_version}"
