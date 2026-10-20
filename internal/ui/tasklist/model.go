@@ -7,6 +7,7 @@ package tasklist
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/tkilb/lazytask/internal/suggest"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/panel"
 )
@@ -98,6 +100,11 @@ var (
 	dueTodayColor    = lipgloss.Color("208")
 	dueTomorrowColor = lipgloss.Color("3")
 	dueLaterColor    = lipgloss.Color("2")
+
+	// startedColor/nextColor color the state marker column (see
+	// renderStateCell).
+	startedColor = lipgloss.Color("2")
+	nextColor    = lipgloss.Color("6")
 )
 
 // priorityColor returns the row foreground color for a task's priority
@@ -238,6 +245,12 @@ func (m Model) Neighbor(delta int) (taskwarrior.Task, bool) {
 func (m Model) ClearSearch() Model {
 	m.searchQuery = ""
 	return m
+}
+
+// SearchActive reports whether a search query is currently recorded (set by
+// Search, cleared by ClearSearch), i.e. whether n/N mean next/prev match.
+func (m Model) SearchActive() bool {
+	return m.searchQuery != ""
 }
 
 // Search sets query as the active search (matched case-insensitively
@@ -462,8 +475,9 @@ func (m Model) View() string {
 func formatRow(width int, id, description, project, priority, due string) string {
 	idWidth, descWidth, projectWidth, priorityWidth, dueWidth := columnWidths(width)
 
-	return fmt.Sprintf("%-*s %-*s  %-*s %-*s %s ",
+	return fmt.Sprintf("%-*s %-*s %-*s  %-*s %-*s %s ",
 		idWidth, truncate(id, idWidth),
+		stateWidth, "",
 		descWidth, truncate(description, descWidth),
 		projectWidth, truncate(project, projectWidth),
 		priorityWidth, truncate(priority, priorityWidth),
@@ -487,12 +501,13 @@ func columnWidths(width int) (idWidth, descWidth, projectWidth, priorityWidth, d
 		fixedPriorityWidth = 1
 		fixedDueWidth      = 3
 	)
-	// -6, not -5: four single-space separators between the five columns,
-	// plus one extra space between Description and Project (for visual
-	// breathing room at that boundary), plus one trailing margin space
-	// after Due, so its right-aligned value never touches the panel's
-	// right border.
-	descWidth = width - fixedIDWidth - fixedProjectWidth - fixedPriorityWidth - fixedDueWidth - 6
+	// -7 (plus stateWidth), not -5: five single-space separators between the six columns
+	// (ID, state marker, Description, Project, Priority, Due), plus one
+	// extra space between Description and Project (for visual breathing
+	// room at that boundary), plus one trailing margin space after Due, so
+	// its right-aligned value never touches the panel's right border; and
+	// the state marker column's own width (stateWidth).
+	descWidth = width - fixedIDWidth - stateWidth - fixedProjectWidth - fixedPriorityWidth - fixedDueWidth - 7
 	if descWidth < 8 {
 		descWidth = 8
 	}
@@ -544,11 +559,37 @@ func renderDataRow(width int, t taskwarrior.Task, selected bool, query string, n
 	sep := base.Render(" ")
 	return strings.Join([]string{
 		base.Render(pad(fmt.Sprintf("%d", t.ID), idWidth)),
+		renderStateCell(t, base),
 		renderDescriptionCell(t.Description, descWidth, query, base, selected),
 		sep + base.Render(pad(t.Project, projectWidth)),
 		priorityStyle.Render(pad(t.Priority, priorityWidth)),
 		dueStyle.Render(rightPad(dueText, dueWidth)),
 	}, sep) + sep
+}
+
+// stateWidth is the width of the narrow marker column between ID and
+// Description showing a task's started/next state.
+const stateWidth = 1
+
+const (
+	// startedMarker flags a task with Taskwarrior's "start" attribute set.
+	startedMarker = "▶"
+	// nextMarker flags a task carrying the "next" tag.
+	nextMarker = "+"
+)
+
+// renderStateCell returns the one-column state marker for t: startedMarker
+// (green) if it is started — which outranks next, matching the Suggested
+// panel — else nextMarker (cyan) if it has the "next" tag, else a blank.
+func renderStateCell(t taskwarrior.Task, base lipgloss.Style) string {
+	switch {
+	case t.Start != "":
+		return base.Foreground(startedColor).Render(startedMarker)
+	case slices.Contains(t.Tags, suggest.NextTag):
+		return base.Foreground(nextColor).Render(nextMarker)
+	default:
+		return base.Render(" ")
+	}
 }
 
 // dueDeltaDays parses a task's raw Due value (taskDueLayout, e.g.

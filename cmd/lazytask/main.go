@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/tkilb/lazytask/internal/config"
 	"github.com/tkilb/lazytask/internal/editbuffer"
 	"github.com/tkilb/lazytask/internal/editor"
+	"github.com/tkilb/lazytask/internal/suggest"
 	"github.com/tkilb/lazytask/internal/taskwarrior"
 	"github.com/tkilb/lazytask/internal/ui/addform"
 	"github.com/tkilb/lazytask/internal/ui/datepick"
@@ -77,7 +79,7 @@ const (
 func panelTitle(f panelFocus) string {
 	switch f {
 	case focusStatus:
-		return "1 Status"
+		return "1 Suggested"
 	case focusProjects:
 		return "3 Projects"
 	case focusTags:
@@ -115,19 +117,18 @@ const (
 	defaultGridHeight = 30
 
 	// gridBottomOverhead is the number of terminal rows View() renders
-	// below the grid (a blank line plus the status bar's single line of
-	// key hints). It must be subtracted from the real terminal height
+	// below the grid (the status bar's single line of key hints, with no
+	// trailing newline so no extra blank row follows it). It must be subtracted from the real terminal height
 	// before sizing the grid, otherwise the grid plus this trailing
 	// content overflows the terminal and the top of the grid (the Status
 	// and Details panels' top borders, both on the grid's first row)
 	// scrolls off-screen.
-	gridBottomOverhead = 2
+	gridBottomOverhead = 1
 
-	// statusPanelHeight is the Status panel's fixed outer height: one
-	// content line (the selected task's id/status/project) plus the two
-	// border rows. Unlike Tasks and the Projects/Tags row, it doesn't grow
-	// with the terminal.
-	statusPanelHeight = 3
+	// maxSuggestions is the most tasks the Suggested panel lists. The panel
+	// is sized to its content: one row per suggestion (one row for the
+	// "nothing pending" message) plus the two border rows.
+	maxSuggestions = 3
 )
 
 // globalBindings are active no matter which panel currently has focus,
@@ -202,6 +203,7 @@ var helpGlobalBindings = []statusbar.Binding{
 	{Key: "u", Label: "undo"},
 	{Key: "ctrl+r", Label: "redo"},
 	{Key: "S", Label: "sync"},
+	{Key: "f", Label: "focus suggested task"},
 	{Key: "?", Label: "help"},
 	{Key: "q", Label: "quit"},
 }
@@ -258,9 +260,20 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 			statusbar.Binding{Key: "p", Label: "filter by project"},
 			statusbar.Binding{Key: "ctrl+j/k", Label: "reorder down/up"},
 			statusbar.Binding{Key: "/", Label: "search"},
-			statusbar.Binding{Key: "n/N", Label: "next/prev match"},
+			statusbar.Binding{Key: "n/N", Label: "next/prev match (while searching)"},
 		)
+		if m.list.Status() == tasklist.TabTodo {
+			bindings = append(bindings,
+				statusbar.Binding{Key: "s", Label: "start/stop task"},
+				statusbar.Binding{Key: "n", Label: "toggle +next tag (when not searching)"},
+			)
+		}
 		return bindings
+	case focusStatus:
+		return []statusbar.Binding{
+			{Key: "↑/k ↓/j", Label: "select suggestion"},
+			{Key: "space", Label: "jump to task"},
+		}
 	case focusProjects:
 		return []statusbar.Binding{
 			{Key: "R", Label: "rename project"},
@@ -336,6 +349,20 @@ type TaskPurger interface {
 // the real `task` binary.
 type TaskImporter interface {
 	Import(ctx context.Context, data []byte) error
+}
+
+// TaskStarter is the subset of the taskwarrior client needed to start/stop
+// a task, so it can be stubbed out in tests.
+type TaskStarter interface {
+	Start(ctx context.Context, id string) error
+	Stop(ctx context.Context, id string) error
+}
+
+// TaskTagger is the subset of the taskwarrior client needed to add/remove a
+// single tag, so it can be stubbed out in tests.
+type TaskTagger interface {
+	AddTag(ctx context.Context, id, tag string) error
+	RemoveTag(ctx context.Context, id, tag string) error
 }
 
 // TaskPrioritizer is the subset of the taskwarrior client needed to set a
@@ -519,6 +546,20 @@ type tasksPurgeErrMsg struct {
 	err error
 }
 
+// taskToggledMsg carries the result of a successful start/stop or next-tag
+// toggle, plus the undo.Action that reverses it and the id of the affected
+// task so the cursor stays on it after the refresh.
+type taskToggledMsg struct {
+	id     int
+	action undo.Action
+}
+
+// taskToggleErrMsg carries the error from a failed start/stop or next-tag
+// toggle.
+type taskToggleErrMsg struct {
+	err error
+}
+
 // taskPrioritySetMsg carries the result of a successful SetPriority call,
 // plus the undo.Action that reverses it (see setPriorityTask) and the id of
 // the task whose priority changed, so the cursor can be kept on it after
@@ -694,6 +735,8 @@ type model struct {
 	purger           TaskPurger
 	importer         TaskImporter
 	prioritizer      TaskPrioritizer
+	starter          TaskStarter
+	tagger           TaskTagger
 	reranker         TaskReRanker
 	duer             TaskDueSetter
 	projecter        TaskProjectSetter
@@ -702,6 +745,8 @@ type model struct {
 	syncSecretFile   string
 	autoSyncInterval time.Duration
 	lastAutoSyncErr  error
+	suggestedTasks   []taskwarrior.Task
+	suggestSel       string
 	mutationSyncGen  int
 	list             tasklist.Model
 	add              taskform.Model
@@ -797,6 +842,8 @@ func initialModel() model {
 		purger:           client,
 		importer:         client,
 		prioritizer:      client,
+		starter:          client,
+		tagger:           client,
 		reranker:         client,
 		duer:             client,
 		projecter:        client,
@@ -892,7 +939,7 @@ func (m model) gridDims() (leftWidth, rightWidth, statusHeight, tasksHeight, bot
 	rightWidth = width - leftWidth
 	fullHeight = height
 
-	statusHeight = statusPanelHeight
+	statusHeight = m.suggestedPanelHeight()
 	tasksHeight = height / 2
 	bottomHeight = height - statusHeight - tasksHeight
 	if bottomHeight < 0 {
@@ -930,6 +977,122 @@ func fetchTasks(reader TaskReader, filters ...string) tea.Cmd {
 		}
 		return tasksLoadedMsg{tasks: tasks}
 	}
+}
+
+// suggestedTasksLoadedMsg carries every pending task, regardless of the
+// Tasks panel's tab/project/tag filters, for the Suggested bar.
+type suggestedTasksLoadedMsg struct {
+	tasks []taskwarrior.Task
+}
+
+// fetchSuggestedTasks loads all pending tasks for the Suggested bar. The
+// Tasks panel's own list is filtered, so it can't be reused. Failures are
+// dropped: the bar keeps its previous suggestion rather than popping up an
+// error for a secondary display. A nil reader yields no command.
+func fetchSuggestedTasks(reader TaskReader) tea.Cmd {
+	if reader == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		tasks, err := reader.Export(context.Background(), "status:pending")
+		if err != nil {
+			return nil
+		}
+		return suggestedTasksLoadedMsg{tasks: tasks}
+	}
+}
+
+// resizePanels sizes the Tasks, Projects, and Tags panels from the
+// model's current terminal size and layout (see gridDims).
+func (m model) resizePanels() (model, tea.Cmd) {
+	leftWidth, _, _, tasksHeight, bottomHeight, _ := m.gridDims()
+	projectsWidth, tagsWidth := subColumnWidths(leftWidth)
+	var listCmd, projectsCmd, tagsCmd tea.Cmd
+	m.list, listCmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: tasksHeight})
+	m.projects, projectsCmd = m.projects.Update(tea.WindowSizeMsg{Width: projectsWidth, Height: bottomHeight})
+	m.tags, tagsCmd = m.tags.Update(tea.WindowSizeMsg{Width: tagsWidth, Height: bottomHeight})
+	return m, tea.Batch(listCmd, projectsCmd, tagsCmd)
+}
+
+// suggestions returns the Suggested panel's ranked picks (at most
+// maxSuggestions) from the current pending tasks.
+func (m model) suggestions() []suggest.Suggestion {
+	return suggest.Rank(m.suggestedTasks, maxSuggestions)
+}
+
+// suggestionKey identifies a suggested task across refreshes (its UUID,
+// falling back to the numeric ID when there is none).
+func suggestionKey(t taskwarrior.Task) string { return taskID(t) }
+
+// selectedSuggestion returns the highlighted row's index within
+// suggestions(): the task whose key matches m.suggestSel, or 0 if that task
+// is no longer among the picks (which also covers the initial state).
+func (m model) selectedSuggestion() int {
+	for i, p := range m.suggestions() {
+		if suggestionKey(m.suggestedTasks[p.Index]) == m.suggestSel {
+			return i
+		}
+	}
+	return 0
+}
+
+// selectedSuggestionKey returns the key of the highlighted task, or "" if
+// there are no suggestions or m.suggestSel no longer names one of them.
+func (m model) selectedSuggestionKey() string {
+	for _, p := range m.suggestions() {
+		if k := suggestionKey(m.suggestedTasks[p.Index]); k == m.suggestSel {
+			return k
+		}
+	}
+	return ""
+}
+
+// moveSuggestion moves the highlight by delta rows, clamped to the list.
+func (m model) moveSuggestion(delta int) model {
+	picks := m.suggestions()
+	if len(picks) == 0 {
+		return m
+	}
+	i := min(max(m.selectedSuggestion()+delta, 0), len(picks)-1)
+	m.suggestSel = suggestionKey(m.suggestedTasks[picks[i].Index])
+	return m
+}
+
+// jumpToSelectedSuggestion handles "space" in the Suggested panel.
+func (m model) jumpToSelectedSuggestion() (model, tea.Cmd) {
+	picks := m.suggestions()
+	if len(picks) == 0 {
+		return m, nil
+	}
+	return m.focusTask(m.suggestedTasks[picks[m.selectedSuggestion()].Index])
+}
+
+// suggestedPanelHeight is the Suggested panel's outer height: one content
+// row per suggestion (at least one, for the empty-state message) plus the
+// two border rows.
+func (m model) suggestedPanelHeight() int {
+	return max(1, len(m.suggestions())) + 2
+}
+
+// suggestedContent renders the Suggested panel's body, one line per
+// suggestion, each truncated (with an ellipsis) to width columns. Without
+// that, a long description would wrap onto extra rows and push the
+// panel — and the whole grid — taller than the terminal, scrolling the
+// top border off-screen.
+func (m model) suggestedContent(width int) string {
+	picks := m.suggestions()
+	if len(picks) == 0 {
+		return statusbar.RenderSuggested("", "", "", width, false)
+	}
+	lines := make([]string, len(picks))
+	sel := m.selectedSuggestion()
+	for i, p := range picks {
+		t := m.suggestedTasks[p.Index]
+		desc := strings.Join(strings.Fields(t.Description), " ")
+		highlighted := m.focus == focusStatus && !m.showingHelp && i == sel
+		lines[i] = statusbar.RenderSuggested(p.Reason.Label(), desc, t.Project, width, highlighted)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // taskFilters returns the full set of `task export` filter fragments for
@@ -1337,6 +1500,83 @@ func setPriorityTask(prioritizer TaskPrioritizer, task taskwarrior.Task, priorit
 			},
 		}}
 	}
+}
+
+// toggleResult builds the message for a completed toggle: do applies the
+// change and revert reverses it, both wired into one undo.Action.
+func toggleResult(task taskwarrior.Task, description string, do, revert func() error) tea.Msg {
+	if err := do(); err != nil {
+		return taskToggleErrMsg{err: err}
+	}
+	return taskToggledMsg{id: task.ID, action: undo.Action{
+		Description: description,
+		Undo:        revert,
+		Redo:        do,
+	}}
+}
+
+// toggleStartTask starts task if it is not started, otherwise stops it.
+func toggleStartTask(starter TaskStarter, task taskwarrior.Task) tea.Cmd {
+	return func() tea.Msg {
+		ctx, id := context.Background(), taskID(task)
+		start := func() error { return starter.Start(ctx, id) }
+		stop := func() error { return starter.Stop(ctx, id) }
+		if task.Start != "" {
+			return toggleResult(task, fmt.Sprintf("stop task %s", id), stop, start)
+		}
+		return toggleResult(task, fmt.Sprintf("start task %s", id), start, stop)
+	}
+}
+
+// toggleNextTag adds the "next" tag to task, or removes it if present.
+func toggleNextTag(tagger TaskTagger, task taskwarrior.Task) tea.Cmd {
+	return func() tea.Msg {
+		ctx, id := context.Background(), taskID(task)
+		add := func() error { return tagger.AddTag(ctx, id, suggest.NextTag) }
+		remove := func() error { return tagger.RemoveTag(ctx, id, suggest.NextTag) }
+		if slices.Contains(task.Tags, suggest.NextTag) {
+			return toggleResult(task, fmt.Sprintf("remove +next from task %s", id), remove, add)
+		}
+		return toggleResult(task, fmt.Sprintf("add +next to task %s", id), add, remove)
+	}
+}
+
+// focusSuggested handles "f": it jumps to the top suggestion. It focuses the Tasks panel on the Todo tab,
+// narrows the project filter to the suggested task's project (or clears
+// the project filter for an orphan task, which has none to apply), drops a
+// tag filter that would hide it, and moves the cursor onto it once the
+// refreshed list arrives.
+func (m model) focusSuggested() (model, tea.Cmd) {
+	idx, _ := suggest.Pick(m.suggestedTasks)
+	if idx < 0 {
+		return m, nil
+	}
+	return m.focusTask(m.suggestedTasks[idx])
+}
+
+// focusTask focuses task in the Tasks panel: Todo tab, its project filter
+// (or none for an orphan), a non-hiding tag filter, and the cursor on it
+// once the refreshed list arrives. Shared by "f" (top suggestion) and
+// "space" (the highlighted suggestion).
+func (m model) focusTask(task taskwarrior.Task) (model, tea.Cmd) {
+	m = m.setFocus(focusTasks)
+	for i := 0; m.list.Status() != tasklist.TabTodo && i < 3; i++ {
+		m.list = m.list.PrevStatus()
+	}
+	if m.filter.tag != nil && !slices.Contains(task.Tags, *m.filter.tag) {
+		m.filter = m.filter.withTagSelection(tags.AnyLabel)
+		m.tags = m.tags.SelectLabel(tags.AnyLabel)
+	}
+	label := projects.AllLabel
+	if task.Project != "" {
+		label = task.Project
+	}
+	m.projects = m.projects.SelectLabel(label)
+	m.pendingFocusID = task.ID
+	if newM, cmd, changed := m.applyProjectSelection(label); changed {
+		return newM, cmd
+	}
+	return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
 }
 
 // taskDueLayout is Taskwarrior's combined UTC export/import format for
@@ -1759,13 +1999,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		leftWidth, _, _, tasksHeight, bottomHeight, _ := m.gridDims()
-		projectsWidth, tagsWidth := subColumnWidths(leftWidth)
-		var listCmd, projectsCmd, tagsCmd tea.Cmd
-		m.list, listCmd = m.list.Update(tea.WindowSizeMsg{Width: leftWidth, Height: tasksHeight})
-		m.projects, projectsCmd = m.projects.Update(tea.WindowSizeMsg{Width: projectsWidth, Height: bottomHeight})
-		m.tags, tagsCmd = m.tags.Update(tea.WindowSizeMsg{Width: tagsWidth, Height: bottomHeight})
-		return m, tea.Batch(listCmd, projectsCmd, tagsCmd)
+		return m.resizePanels()
 	case tea.KeyMsg:
 		// Global bindings apply no matter which panel has focus: they only
 		// ever touch app lifecycle or panel focus itself, never
@@ -1820,6 +2054,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, runSync(m.syncer, m.syncSecretFile)
+		case "f":
+			return m.focusSuggested()
 		}
 		// Projects-panel-local: navigation (up/down/j/k) is applied
 		// directly here, rather than being delegated to the bottom
@@ -1881,6 +2117,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, cmd
+		}
+		// Suggested-panel-local: move the highlight, or jump to the task.
+		if m.focus == focusStatus {
+			switch msg.String() {
+			case "up", "k":
+				return m.moveSuggestion(-1), nil
+			case "down", "j":
+				return m.moveSuggestion(1), nil
+			case " ":
+				return m.jumpToSelectedSuggestion()
+			}
+			return m, nil
 		}
 		// Everything else is local to the Tasks panel and only fires while
 		// it has focus (lazygit-style global/local keybinding split).
@@ -1983,13 +2231,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m, cmd = m.startSearch("search description...", searchScopeTasks)
 			return m, cmd
 		case "n":
-			if newList, ok := m.list.NextMatch(); ok {
-				m.list = newList
+			if m.list.SearchActive() {
+				if newList, ok := m.list.NextMatch(); ok {
+					m.list = newList
+				}
+				return m, nil
+			}
+			if task, ok := m.list.Selected(); ok && m.list.Status() == tasklist.TabTodo {
+				return m, toggleNextTag(m.tagger, task)
 			}
 			return m, nil
 		case "N":
 			if newList, ok := m.list.PrevMatch(); ok {
 				m.list = newList
+			}
+			return m, nil
+		case "s":
+			if task, ok := m.list.Selected(); ok && m.list.Status() == tasklist.TabTodo {
+				return m, toggleStartTask(m.starter, task)
 			}
 			return m, nil
 		case "esc":
@@ -2001,6 +2260,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingFocusID != 0 {
 			m.list = m.list.SelectID(m.pendingFocusID)
 			m.pendingFocusID = 0
+		}
+		return m, fetchSuggestedTasks(m.reader)
+	case suggestedTasksLoadedMsg:
+		oldHeight := m.suggestedPanelHeight()
+		m.suggestedTasks = msg.tasks
+		if m.selectedSuggestionKey() == "" {
+			m.suggestSel = ""
+		}
+		// The Suggested panel is content-sized, so a change in suggestion
+		// count shifts every other panel's share of the left column. They
+		// only learn their size from an explicit resize, so re-send it —
+		// otherwise the layout stays wrong until the terminal is resized.
+		if m.width > 0 && m.suggestedPanelHeight() != oldHeight {
+			return m.resizePanels()
 		}
 		return m, nil
 	case tasksErrMsg:
@@ -2084,6 +2357,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.undo.Push(msg.action)
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
 	case tasksPurgeErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskToggledMsg:
+		m.undo.Push(msg.action)
+		m.pendingFocusID = msg.id
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), m.scheduleMutationAutoSync())
+	case taskToggleErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPrioritySetMsg:
@@ -2788,13 +3068,13 @@ var autoSyncErrStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 func (m model) baseView() string {
 	view := m.renderGrid()
 	if m.searching {
-		view += "\n" + m.searchInput.View() + "\n"
+		view += "\n" + m.searchInput.View()
 	} else {
 		line := statusbar.Render(m.statusBindings())
 		if m.lastAutoSyncErr != nil {
 			line += "  " + autoSyncErrStyle.Render(fmt.Sprintf("⚠ auto-sync failed: %v", m.lastAutoSyncErr))
 		}
-		view += "\n" + line + "\n"
+		view += "\n" + line
 	}
 	return view
 }
@@ -2907,31 +3187,11 @@ func (m model) View() string {
 	return view
 }
 
-// statusPanelContent returns the single content line shown in the Status
-// panel: the id, status, project, and tags of whichever task is currently
-// selected in the Tasks list. It updates live as the Tasks cursor moves,
-// since it always reads the list's current selection.
-func (m model) statusPanelContent() string {
-	task, ok := m.list.Selected()
-	if !ok {
-		return "(no task selected)"
-	}
-	project := task.Project
-	if project == "" {
-		project = "(none)"
-	}
-	tags := "(none)"
-	if len(task.Tags) > 0 {
-		tags = strings.Join(task.Tags, ",")
-	}
-	return fmt.Sprintf("#%d  [%s]  P:%s  T:%s", task.ID, task.Status, project, tags)
-}
-
 // detailsPanelContent returns the full-detail, read-only, multi-line view
 // shown in the Details panel for whatever task is currently selected in
 // the Tasks list. It updates live as the Tasks cursor moves, since it
-// always reads the list's current selection (same approach as
-// statusPanelContent).
+// always reads the list's current selection (the Suggested
+// panel, by contrast, reads all pending tasks).
 func (m model) detailsPanelContent() string {
 	task, ok := m.list.Selected()
 	if !ok {
@@ -3044,7 +3304,8 @@ func (m model) renderGrid() string {
 		m.tags = m.tags.SetFocused(false)
 	}
 
-	status := panel.Render(panelTitle(focusStatus), m.statusPanelContent(), leftWidth, statusHeight, statusFocused)
+	innerLeftWidth, _ := panel.InnerSize(leftWidth, statusHeight)
+	status := panel.Render(panelTitle(focusStatus), m.suggestedContent(innerLeftWidth), leftWidth, statusHeight, statusFocused)
 	tasksPanel := m.list.View()
 	projectsPanel := m.projects.View()
 	tagsPanel := m.tags.View()

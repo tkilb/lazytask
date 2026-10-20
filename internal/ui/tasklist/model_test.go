@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -729,4 +730,39 @@ func TestPrevMatch_NoActiveQuery_IsNoOp(t *testing.T) {
 
 	_, found := m.PrevMatch()
 	assert.False(t, found)
+}
+
+func TestModel_SearchActive(t *testing.T) {
+	m := New([]taskwarrior.Task{{ID: 1, Description: "alpha"}})
+	assert.False(t, m.SearchActive())
+	m, _ = m.Search("alpha")
+	assert.True(t, m.SearchActive())
+	assert.False(t, m.ClearSearch().SearchActive())
+}
+
+func TestRenderStateCell(t *testing.T) {
+	base := lipgloss.NewStyle()
+	tests := []struct {
+		name string
+		task taskwarrior.Task
+		want string
+	}{
+		{"plain", taskwarrior.Task{}, " "},
+		{"started", taskwarrior.Task{Start: "20240101T000000Z"}, startedMarker},
+		{"next", taskwarrior.Task{Tags: []string{"x", "next"}}, nextMarker},
+		{"started outranks next", taskwarrior.Task{Start: "20240101T000000Z", Tags: []string{"next"}}, startedMarker},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Contains(t, renderStateCell(tt.task, base), tt.want)
+		})
+	}
+}
+
+func TestRenderDataRow_ShowsStateMarkerAndKeepsWidth(t *testing.T) {
+	plain := renderDataRow(80, taskwarrior.Task{ID: 1, Description: "a"}, false, "", time.Now())
+	started := renderDataRow(80, taskwarrior.Task{ID: 1, Description: "a", Start: "20240101T000000Z"}, false, "", time.Now())
+	assert.Contains(t, started, startedMarker)
+	assert.NotContains(t, plain, startedMarker)
+	assert.Equal(t, ansi.StringWidth(plain), ansi.StringWidth(started))
 }

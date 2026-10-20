@@ -23,6 +23,10 @@ type TaskMutator interface {
 	SetDue(ctx context.Context, id, due string) error
 	SetProject(ctx context.Context, id, project string) error
 	Annotate(ctx context.Context, id, text string) error
+	Start(ctx context.Context, id string) error
+	Stop(ctx context.Context, id string) error
+	AddTag(ctx context.Context, id, tag string) error
+	RemoveTag(ctx context.Context, id, tag string) error
 	Sync(ctx context.Context, secret string) error
 }
 
@@ -169,6 +173,50 @@ func (c *Client) SetProject(ctx context.Context, id, project string) error {
 		return fmt.Errorf("id must not be empty")
 	}
 	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "project:"+project)
+	return err
+}
+
+// Start marks the task identified by id (a Taskwarrior ID or UUID) as
+// actively being worked on, setting Taskwarrior's native "start" attribute.
+func (c *Client) Start(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "start")
+	return err
+}
+
+// Stop clears the "start" attribute of the task identified by id (a
+// Taskwarrior ID or UUID), via `task <id> stop`.
+func (c *Client) Stop(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "stop")
+	return err
+}
+
+// AddTag adds tag (without a leading "+") to the task identified by id (a
+// Taskwarrior ID or UUID). Adding a tag the task already has is a no-op.
+func (c *Client) AddTag(ctx context.Context, id, tag string) error {
+	return c.modifyTag(ctx, id, tag, "+")
+}
+
+// RemoveTag removes tag (without a leading "-") from the task identified by
+// id (a Taskwarrior ID or UUID). Removing an absent tag is a no-op.
+func (c *Client) RemoveTag(ctx context.Context, id, tag string) error {
+	return c.modifyTag(ctx, id, tag, "-")
+}
+
+func (c *Client) modifyTag(ctx context.Context, id, tag, sign string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	tag = strings.TrimSpace(tag)
+	if tag == "" || strings.ContainsAny(tag, " \t") || strings.HasPrefix(tag, "+") || strings.HasPrefix(tag, "-") {
+		return fmt.Errorf("invalid tag %q", tag)
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", sign+tag)
 	return err
 }
 

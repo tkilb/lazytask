@@ -679,9 +679,11 @@ shipped). Human requested this instead run automatically so devices that
         without scrolling at a realistic terminal size, with the
         corrected header format/indent and colors.
 
-- [ ] **Redo status bar → "Suggested" bar (scope decided 2026-09-30, human
-      sign-off).** Theme: "what's next for the user." The bottom bar stops
-      showing keybinding hints entirely (the `?` popup is now the single
+- [x] **Redo status bar → "Suggested" panel (scope decided 2026-09-30, human
+      sign-off; clarified 2026-10-20: the Suggested line replaces the `1`
+      Status panel, not the bottom bar — the original "bar" wording was a
+      planning oversight).** Theme: "what's next for the user." The bottom
+      bar stops showing keybinding hints entirely (the `?` popup is now the single
       source of truth for those) and instead renders one dynamic
       "Suggested" line pointing at the single most relevant task, in this
       priority order (highest to lowest):
@@ -713,11 +715,130 @@ shipped). Human requested this instead run automatically so devices that
         `+next`-tagged (e.g. label reads "started", precedence note only,
         since rank 1 already covers it — no separate combined state
         needed given the ranking above).
-      - Needs follow-up chunking: read/write plumbing for `start`/`stop`
-        and the `next` tag in `internal/taskwarrior`, the ranking/
-        selection logic, the new `Suggested` render replacing
-        `statusbar.Render`, and the `s`/`n`/`f` keybinding wiring.
-- [ ] **Funnel for adhoc tasks (scope decided 2026-09-30, human
+      - **Chunking plan (decided 2026-10-20):**
+        1. ✅ **Taskwarrior plumbing (done, uncommitted)** — `Task.Start`
+           field; `Client.Start`/`Stop` (`task <id> start|stop`) and
+           `Client.AddTag`/`RemoveTag` (`modify +tag`/`-tag`, rejecting
+           empty tags, whitespace, and a leading `+`/`-`), all added to
+           `TaskMutator`. Covered by `startstop_test.go` (arg validation +
+           temp-`TASKDATA` integration test). Diff: ~110 lines, 3 files.
+        2. ✅ **Ranking/selection logic (done, uncommitted)** — new
+           `internal/suggest` package: `Pick(tasks) (index, Reason)` over
+           pending tasks only, ranked started → `+next` → orphan →
+           urgency. **Decided 2026-10-20:** multi-started tie-break is the
+           most recently started (`Start` timestamp, lexical compare);
+           other ties go to higher `Urgency+UrgencyOffset`, then earliest
+           list position. Covered by `suggest_test.go` (100% coverage).
+           Diff: ~130 lines, 2 new files, not yet wired into the UI.
+        3. ✅ **`Suggested` render (done, uncommitted; revised 2026-10-20 per
+           human)** — first built on the bottom bar, but the human
+           preferred it **replacing the `1 Status` panel** instead (the
+           panel keeps key `1`; title is now "1 Suggested"). It renders
+           `<reason>: <description> [<project>]` (or `nothing pending`)
+           via `statusbar.RenderSuggested` + `suggest.Reason.Label`. The
+           old Status panel content (selected task's id/status/project/
+           tags) is dropped — the Details panel already shows it. The
+           bottom key-hint bar is **kept** (restored 2026-10-20 after the
+           human noticed the lost help bar and the two blank bottom
+           lines; this supersedes the earlier "bar stops showing hints"
+           wording above). Also fixed a stray blank row under the hint bar
+           (2026-10-20): `baseView` no longer appends a trailing `\n` and
+           `gridBottomOverhead` is 1, so the view is exactly terminal height. The Tasks list is
+           tab/project/tag-filtered, so the panel uses its own
+           `model.suggestedTasks`, refreshed by a `status:pending` export
+           (`fetchSuggestedTasks`/`suggestedTasksLoadedMsg`) chained after
+           every `tasksLoadedMsg`; fetch errors are silently ignored.
+           Removed obsolete `statusPanelContent` and its tests.
+        4. ✅ **`s`/`n`/`f` keybinding wiring (done, uncommitted)** —
+           `s` toggles start/stop and `n` toggles the `next` tag on the
+           selected task (Todo tab only; no-op on Done/Deleted). `n`
+           keeps meaning "next match" while a `/` search is active
+           (new `tasklist.Model.SearchActive`); `N` is unchanged. Both go
+           through one shared `taskToggledMsg`/`taskToggleErrMsg`
+           (undo-stack push, cursor kept on the task, refresh +
+           on-mutation auto-sync), new `TaskStarter`/`TaskTagger`
+           interfaces + `model.starter`/`tagger`. `f` is global (any
+           panel): switches to Tasks/Todo, applies the suggested task's
+           project filter (`applyProjectSelection`), then moves the cursor
+           via `pendingFocusID`. **Decisions 2026-10-20:** (a) for an
+           orphan task, `f` *clears* any project filter (selects "(all)")
+           rather than being a pure no-op as originally written, so the
+           task is not hidden by a stale filter; (b) a tag filter the task
+           doesn't carry is also cleared; (c) the new keys are documented
+           in the `?` popup only (Local: `s`, `n`; Global: `f`), not the
+           hint bar. Tests: `togglekeys_test.go`,
+           `tasklist.TestModel_SearchActive`.
+        **Enhancement — Suggested panel as a 3-item list (decided
+        2026-10-20, human sign-off):** panel `1` shows the top 3 ranked
+        tasks, sized to content (1–3 rows; 1 row for "nothing pending");
+        `↑/k`/`↓/j` move a highlight while it has focus; `space` jumps to
+        the highlighted task (focus Tasks/Todo, project filter, cursor).
+        `f` stays as "jump to the top suggestion" from any panel. Defaults:
+        highlight only while focused; selection sticks to the same task
+        across refreshes if still in the top 3, else resets to row 1;
+        panel gets its own Local section in `?`.
+        - ✅ **E1 — `suggest.Rank(tasks, n)` (done, uncommitted)** — returns
+          up to n `Suggestion{Index, Reason}` in the existing ranking
+          order; `Pick` is now `Rank(tasks, 1)`'s first entry. 100%
+          coverage. No UI change.
+        - ✅ **E2 — list rendering + content-sized panel (done,
+          uncommitted)** — `model.suggestions()` (`suggest.Rank`, max
+          `maxSuggestions`=3), `suggestedContent()` (one line each) and
+          `suggestedPanelHeight()` (rows + 2 borders, min 1 row) replace
+          `suggestedLine`/`statusPanelHeight`; `gridDims` uses the dynamic
+          height, so the Projects/Tags row absorbs the difference (Tasks'
+          height is `height/2`, independent of it). No selection yet.
+          Tests in `suggested_test.go`.
+          **Bug fix (2026-10-20):** panel 1's top border scrolled
+          off-screen when a suggestion's description was longer than the
+          panel — the body wrapped onto extra rows, making the grid taller
+          than the terminal. `suggestedContent(width)` now collapses
+          whitespace/newlines and truncates each row with an ellipsis.
+          Covered by `TestView_LongSuggestionsDoNotOverflowTerminal`.
+          **Tweak (2026-10-20):** the `[project]` is now right-aligned in
+          each row (`statusbar.RenderSuggested(..., width)`), and a long
+          reason/description is truncated with `…` so it never crowds the
+          project (a 1-column gap is always kept). A project too wide to
+          share the row is dropped rather than truncated.
+          **Bug fix (2026-10-20) — wrong sizing at launch, fixed by a
+          resize:** the Tasks/Projects/Tags panels only learn their size
+          from `tea.WindowSizeMsg`. At launch the suggestions load *after*
+          the first resize, changing panel 1's content-sized height, so
+          the other panels kept stale heights until the terminal was
+          resized. Extracted `model.resizePanels()` and re-run it from
+          `suggestedTasksLoadedMsg` whenever the panel height changes.
+          Covered by `TestView_PanelsResizeWhenSuggestionsLoadAfterWindowSize`
+          (verified to fail without the fix).
+          Known remaining limit: on a very short terminal (~14 rows) with
+          3 suggestions the grid's minimum panel heights can still exceed
+          the terminal.
+        - ✅ **E3 — selection + jump (done, uncommitted)** — while panel
+          `1` has focus, `↑/k`/`↓/j` move a highlighted row (clamped; the
+          row gets `panel.SelectedRowBackground` across the full width,
+          via a new `selected` arg on `statusbar.RenderSuggested`, shown
+          only while focused and not under the `?` popup). `space` jumps
+          to the highlighted task through new `model.focusTask(task)`,
+          which `f`'s `focusSuggested` now also uses. Selection is stored
+          as `model.suggestSel` (task UUID/ID) so it sticks to the same
+          task across refreshes while it stays in the top 3, and resets to
+          row 1 (and is forgotten) once it drops out. Panel `1` gets a
+          Local section in `?` (`↑/k ↓/j`, `space`). Tests in
+          `suggested_test.go` (no new dependency: `termenv` is already a
+          direct dependency, used to force a color profile in one test).
+          All three enhancement chunks are done.
+          **Tweak (2026-10-20):** the reason label (`started:`, etc.) is now
+          ANSI cyan/teal instead of blue, for contrast against the blue
+          highlight bar.
+        **Follow-up, 2026-10-20 — state markers in the Tasks list.** A new
+        1-wide column between ID and Description shows `▶` (green) for a
+        started task and `+` (cyan) for a `+next` task (started wins if
+        both, matching the Suggested ranking). Description lost 2 columns
+        to make room (`columnWidths`/`formatRow`/`renderDataRow` in
+        `internal/ui/tasklist`). Covered by `TestRenderStateCell`,
+        `TestRenderDataRow_ShowsStateMarkerAndKeepsWidth`.
+        With chunk 4 done, the Suggested-panel item and the "Funnel for
+        adhoc tasks" item (satisfied by the orphan ranking) are complete.
+- [x] **Funnel for adhoc tasks (scope decided 2026-09-30, human
       sign-off).** Reframed from "a quick-capture flow" to **orphan
       detection**: most adhoc/one-off tasks are expected to arrive via
       the native `task add` CLI (not lazytask's own Add Task form), so no

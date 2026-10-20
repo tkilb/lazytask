@@ -8,16 +8,19 @@ import (
 
 // Task represents a task item from Taskwarrior JSON export.
 type Task struct {
-	ID          int          `json:"id"`
-	UUID        string       `json:"uuid"`
-	Description string       `json:"description"`
-	Status      string       `json:"status"`
-	Project     string       `json:"project,omitempty"`
-	Priority    string       `json:"priority,omitempty"`
-	Due         string       `json:"due,omitempty"`
-	Entry       string       `json:"entry,omitempty"`
-	Modified    string       `json:"modified,omitempty"`
-	End         string       `json:"end,omitempty"`
+	ID          int    `json:"id"`
+	UUID        string `json:"uuid"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	Project     string `json:"project,omitempty"`
+	Priority    string `json:"priority,omitempty"`
+	Due         string `json:"due,omitempty"`
+	Entry       string `json:"entry,omitempty"`
+	Modified    string `json:"modified,omitempty"`
+	End         string `json:"end,omitempty"`
+	// Start is Taskwarrior's native "start" timestamp, set while a task is
+	// actively being worked on (see Client.Start/Stop). Empty when not started.
+	Start       string       `json:"start,omitempty"`
 	Tags        []string     `json:"tags,omitempty"`
 	Annotations []Annotation `json:"annotations,omitempty"`
 	Urgency     float64      `json:"urgency,omitempty"`
