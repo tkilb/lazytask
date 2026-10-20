@@ -1369,19 +1369,19 @@ func resolveEditedDue(input string, now time.Time) (due string, ok bool) {
 	return "", false
 }
 
-// setDueTask returns a tea.Cmd that sets task's due date to due via duer,
-// returning an undo.Action that reverses it back to the task's prior due
-// date (which may be empty, clearing it back to "no due date").
-func setDueTask(duer TaskDueSetter, task taskwarrior.Task, due time.Time) tea.Cmd {
+// setDueTask returns a tea.Cmd that sets task's due date to formatted (a
+// taskDueLayout string, or "" to clear the due date) via duer, returning
+// an undo.Action that reverses it back to the task's prior due date
+// (which may be empty, clearing it back to "no due date").
+func setDueTask(duer TaskDueSetter, task taskwarrior.Task, formatted string) tea.Cmd {
 	return func() tea.Msg {
 		id := taskID(task)
 		prior := task.Due
-		formatted := due.UTC().Format(taskDueLayout)
 		if err := duer.SetDue(context.Background(), id, formatted); err != nil {
 			return taskDueErrMsg{err: err}
 		}
 		return taskDueSetMsg{id: task.ID, action: undo.Action{
-			Description: fmt.Sprintf("set task %s due date to %s", id, formatted),
+			Description: describeDueChange(id, formatted),
 			Undo: func() error {
 				return duer.SetDue(context.Background(), id, prior)
 			},
@@ -1390,6 +1390,15 @@ func setDueTask(duer TaskDueSetter, task taskwarrior.Task, due time.Time) tea.Cm
 			},
 		}}
 	}
+}
+
+// describeDueChange renders the undo-history description for a due-date
+// change; an empty formatted value means the due date was cleared.
+func describeDueChange(id, formatted string) string {
+	if formatted == "" {
+		return fmt.Sprintf("cleared task %s due date", id)
+	}
+	return fmt.Sprintf("set task %s due date to %s", id, formatted)
 }
 
 // setProjectTask returns a tea.Cmd that reassigns task's project to
@@ -2459,9 +2468,10 @@ func (m model) updateRenameConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateDatePicking handles messages while the due-date quick-pick popup is
 // focused: entering a cord (e.g. "2d") or an absolute date for the
-// selected task's new due date. An empty or unparseable input surfaces a
-// warning popup and leaves the picker open rather than silently doing
-// nothing, so the user knows why enter didn't submit.
+// selected task's new due date. An empty (or whitespace-only) input clears
+// the task's due date. An unparseable input surfaces a warning popup and
+// leaves the picker open rather than silently doing nothing, so the user
+// knows why enter didn't submit.
 func (m model) updateDatePicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -2471,10 +2481,14 @@ func (m model) updateDatePicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.datePick = m.datePick.Blur()
 			return m, nil
 		case "enter":
-			due, ok := m.datePick.Resolved()
-			if !ok {
-				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Enter a valid cord (2d, 1w, 2b) or date (YYYY-MM-DD)."})
-				return m, nil
+			formatted := ""
+			if strings.TrimSpace(m.datePick.Value()) != "" {
+				due, ok := m.datePick.Resolved()
+				if !ok {
+					m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Enter a valid cord (2d, 1w, 2b) or date (YYYY-MM-DD), or leave empty to clear."})
+					return m, nil
+				}
+				formatted = due.UTC().Format(taskDueLayout)
 			}
 			task, ok := m.list.Selected()
 			m.datePicking = false
@@ -2482,7 +2496,7 @@ func (m model) updateDatePicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			return m, setDueTask(m.duer, task, due)
+			return m, setDueTask(m.duer, task, formatted)
 		}
 	}
 

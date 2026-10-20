@@ -206,7 +206,7 @@ func (m Model) View() string {
 // error hint for text that doesn't parse as a cord.
 func (m Model) previewLine() string {
 	if m.input.Value() == "" {
-		return previewStyle.Render("Enter shorthand (0, 2d, 2b, 1w) or a date")
+		return previewStyle.Render("Shorthand (0, 2d, 2b, 1w) or date; empty clears")
 	}
 	if resolved, ok := m.Resolved(); ok {
 		return previewStyle.Render(resolved.Format(previewLayout))

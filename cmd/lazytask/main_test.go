@@ -1650,6 +1650,11 @@ func TestModelUpdate_DatePickingEnterInvalidShowsWarningAndStaysOpen(t *testing.
 		list:        tasklist.New([]taskwarrior.Task{{ID: 1, Description: "Buy milk"}}),
 	}
 
+	for _, r := range "xyz" {
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = newModel.(model)
+	}
+
 	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = newModel.(model)
 	assert.True(t, m.datePicking)
@@ -1657,6 +1662,36 @@ func TestModelUpdate_DatePickingEnterInvalidShowsWarningAndStaysOpen(t *testing.
 	msg, ok := m.popups.Current()
 	require.True(t, ok)
 	assert.Equal(t, popup.Warning, msg.Severity)
+}
+
+func TestModelUpdate_DatePickingEnterEmptyClearsDueDate(t *testing.T) {
+	duer := &stubDueSetter{}
+	m := model{
+		datePicking: true,
+		datePick:    datepick.New().Focus(),
+		duer:        duer,
+		list:        tasklist.New([]taskwarrior.Task{{ID: 1, UUID: "abc-123", Description: "Buy milk", Due: "20240115T000000Z"}}),
+	}
+
+	newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = newModel.(model)
+	assert.False(t, m.datePicking)
+	_, hasWarning := m.popups.Current()
+	assert.False(t, hasWarning)
+	require.NotNil(t, cmd)
+
+	msg, ok := cmd().(taskDueSetMsg)
+	require.True(t, ok)
+	assert.Equal(t, 1, msg.id)
+	require.Len(t, duer.dues, 1)
+	assert.Equal(t, "", duer.dues[0])
+	assert.Equal(t, "abc-123", duer.ids[0])
+
+	// Undo restores the prior due date; redo clears it again.
+	require.NoError(t, msg.action.Undo())
+	assert.Equal(t, "20240115T000000Z", duer.dues[len(duer.dues)-1])
+	require.NoError(t, msg.action.Redo())
+	assert.Equal(t, "", duer.dues[len(duer.dues)-1])
 }
 
 func searchTestTasks() []taskwarrior.Task {
