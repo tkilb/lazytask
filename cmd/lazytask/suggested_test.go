@@ -74,9 +74,9 @@ func TestView_FillsTerminalHeightExactly(t *testing.T) {
 	assert.Contains(t, lines[len(lines)-1], "quit")
 }
 
-func TestSuggestedContent_ListsUpToThreeAndSizesPanel(t *testing.T) {
+func TestSuggestedContent_ListsUpToFiveWhenFocusedAndSizesPanel(t *testing.T) {
 	mk := func(n int) model {
-		m := model{}
+		m := model{focus: focusStatus}
 		for i := 0; i < n; i++ {
 			m.suggestedTasks = append(m.suggestedTasks, taskwarrior.Task{
 				Description: fmt.Sprintf("task%d", i), Status: "pending", Project: "P", Urgency: float64(10 - i),
@@ -84,17 +84,23 @@ func TestSuggestedContent_ListsUpToThreeAndSizesPanel(t *testing.T) {
 		}
 		return m
 	}
-	for n, wantRows := range map[int]int{0: 1, 1: 1, 2: 2, 3: 3, 5: 3} {
+	for n, wantRows := range map[int]int{0: 1, 1: 1, 2: 2, 3: 3, 5: 5, 8: 5} {
 		m := mk(n)
 		assert.Len(t, strings.Split(m.suggestedContent(80), "\n"), wantRows, "n=%d", n)
 		assert.Equal(t, wantRows+2, m.suggestedPanelHeight(), "n=%d", n)
 	}
-	assert.Contains(t, mk(5).suggestedContent(80), "task0")
-	assert.NotContains(t, mk(5).suggestedContent(80), "task3")
+	assert.Contains(t, mk(8).suggestedContent(80), "task4")
+	assert.NotContains(t, mk(8).suggestedContent(80), "task5")
+
+	unfocused := mk(8)
+	unfocused.focus = focusTasks
+	assert.Len(t, strings.Split(unfocused.suggestedContent(80), "\n"), 1, "collapses to one row unfocused")
+	assert.Equal(t, 3, unfocused.suggestedPanelHeight())
+	assert.Contains(t, unfocused.suggestedContent(80), "task0")
 }
 
 func TestView_SuggestedPanelGrowsWithSuggestions(t *testing.T) {
-	m := model{list: tasklist.New(nil), suggestedTasks: []taskwarrior.Task{
+	m := model{list: tasklist.New(nil), focus: focusStatus, suggestedTasks: []taskwarrior.Task{
 		{Description: "one", Status: "pending", Project: "P"},
 		{Description: "two", Status: "pending", Project: "P"},
 	}}
@@ -154,7 +160,7 @@ func keyOf(m model, s string) model {
 }
 
 func TestSuggestedPanel_UpDownMovesHighlightClamped(t *testing.T) {
-	m := suggestPanelModel("a", "b", "c", "d")
+	m := suggestPanelModel("a", "b", "c", "d", "e", "f")
 	assert.Equal(t, 0, m.selectedSuggestion())
 
 	m = keyOf(m, "j")
@@ -162,10 +168,12 @@ func TestSuggestedPanel_UpDownMovesHighlightClamped(t *testing.T) {
 	nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = nm.(model)
 	assert.Equal(t, 2, m.selectedSuggestion())
-	m = keyOf(m, "j") // only 3 rows are listed
-	assert.Equal(t, 2, m.selectedSuggestion())
+	m = keyOf(keyOf(m, "j"), "j")
+	assert.Equal(t, 4, m.selectedSuggestion())
+	m = keyOf(m, "j") // only 5 rows are listed
+	assert.Equal(t, 4, m.selectedSuggestion())
 
-	m = keyOf(m, "k")
+	m = keyOf(keyOf(keyOf(m, "k"), "k"), "k")
 	nm, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = nm.(model)
 	assert.Equal(t, 0, m.selectedSuggestion())
@@ -197,16 +205,18 @@ func TestSuggestedPanel_SpaceWithNothingIsNoOp(t *testing.T) {
 func TestSuggestedPanel_SelectionSticksToTaskAcrossRefresh(t *testing.T) {
 	m := keyOf(suggestPanelModel("a", "b", "c"), "j") // highlight "b" (u2)
 
-	// A new, more urgent task pushes b down one row, but it is still in the top 3.
+	// A new, more urgent task pushes b down one row, but it is still in the top 5.
 	refreshed := append([]taskwarrior.Task{{ID: 9, UUID: "u9", Description: "new", Status: "pending", Project: "P", Urgency: 500}}, m.suggestedTasks...)
 	nm, _ := m.Update(suggestedTasksLoadedMsg{tasks: refreshed})
 	mm := nm.(model)
 	assert.Equal(t, 2, mm.selectedSuggestion(), "still on b, now row 3")
 
-	// b drops out of the top 3 entirely: reset to row 1, and forget it.
+	// b drops out of the top 5 entirely: reset to row 1, and forget it.
 	more := append([]taskwarrior.Task{
 		{ID: 10, UUID: "u10", Description: "x", Status: "pending", Project: "P", Urgency: 900},
 		{ID: 11, UUID: "u11", Description: "y", Status: "pending", Project: "P", Urgency: 800},
+		{ID: 12, UUID: "u12", Description: "z", Status: "pending", Project: "P", Urgency: 700},
+		{ID: 13, UUID: "u13", Description: "w", Status: "pending", Project: "P", Urgency: 600},
 	}, refreshed...)
 	nm, _ = mm.Update(suggestedTasksLoadedMsg{tasks: more})
 	mm = nm.(model)
@@ -219,7 +229,7 @@ func TestSuggestedPanel_HighlightOnlyWhileFocused(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.ANSI256) // tests run without a TTY, which strips all styling
 	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
 
-	m := suggestPanelModel("a", "b")
+	m := suggestPanelModel("a") // one pick: unfocused shows only one row, so the text matches
 	focused := m.suggestedContent(60)
 	m.focus = focusTasks
 	unfocused := m.suggestedContent(60)

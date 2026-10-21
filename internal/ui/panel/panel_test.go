@@ -122,3 +122,39 @@ func TestScrollWindow_ZeroItems(t *testing.T) {
 	assert.Equal(t, 0, start)
 	assert.Equal(t, 0, end)
 }
+
+func TestCenteredScrollWindow_FitsWithoutScrolling(t *testing.T) {
+	start, end := CenteredScrollWindow(2, 3, 10)
+	assert.Equal(t, 0, start)
+	assert.Equal(t, 3, end)
+}
+
+func TestCenteredScrollWindow_CursorInMiddle(t *testing.T) {
+	start, end := CenteredScrollWindow(10, 20, 5)
+	assert.Equal(t, 8, start, "two rows above the cursor")
+	assert.Equal(t, 13, end, "two rows below the cursor")
+}
+
+func TestCenteredScrollWindow_ClampsAtEnds(t *testing.T) {
+	start, end := CenteredScrollWindow(0, 20, 5)
+	assert.Equal(t, 0, start)
+	assert.Equal(t, 5, end)
+	start, end = CenteredScrollWindow(1, 20, 5)
+	assert.Equal(t, 0, start)
+	assert.Equal(t, 5, end)
+	start, end = CenteredScrollWindow(19, 20, 5)
+	assert.Equal(t, 15, start)
+	assert.Equal(t, 20, end)
+}
+
+func TestCenteredScrollWindow_CursorAlwaysWithinWindow(t *testing.T) {
+	const total = 37
+	for _, visible := range []int{1, 2, 5, 6} {
+		for cursor := 0; cursor < total; cursor++ {
+			start, end := CenteredScrollWindow(cursor, total, visible)
+			assert.GreaterOrEqual(t, cursor, start)
+			assert.Less(t, cursor, end)
+			assert.Equal(t, visible, end-start)
+		}
+	}
+}

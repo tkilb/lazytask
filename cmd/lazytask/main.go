@@ -125,10 +125,32 @@ const (
 	// scrolls off-screen.
 	gridBottomOverhead = 1
 
-	// maxSuggestions is the most tasks the Suggested panel lists. The panel
-	// is sized to its content: one row per suggestion (one row for the
-	// "nothing pending" message) plus the two border rows.
-	maxSuggestions = 3
+	// maxSuggestions is the most tasks the Suggested panel lists, and only
+	// while it has focus: the panel is sized to its content, one row per
+	// suggestion (one row for the "nothing pending" message) plus the two
+	// border rows. Unfocused it collapses to suggestedUnfocusedRows.
+	maxSuggestions         = 5
+	suggestedUnfocusedRows = 1
+
+	// panelBorderRows is the rows a panel's top and bottom borders take.
+	panelBorderRows = 2
+
+	// minListPanelHeight is the smallest outer height the Projects/Tags row
+	// shrinks to: five content rows plus borders.
+	minListPanelHeight = 5 + panelBorderRows
+
+	// tasksMinRows and tasksMinPercent set how small the Tasks panel gets
+	// while another panel has focus: the larger of tasksMinRows content
+	// rows and tasksMinPercent of the left column.
+	tasksMinRows    = 8
+	tasksMinPercent = 40
+
+	// tasklistOnlyBelow is the terminal height under which only the Tasks
+	// panel (and Details) is shown; Suggested, Projects and Tags are hidden.
+	// It is the least height at which every panel keeps its floor with
+	// Suggested focused: 7 (five picks) + 10 (Tasks) + 7 (Projects/Tags)
+	// rows, plus the status bar line.
+	tasklistOnlyBelow = 25
 )
 
 // globalBindings are active no matter which panel currently has focus,
@@ -868,11 +890,37 @@ func initialModel() model {
 // Projects/Tags panels' own focused flags (used for their border
 // highlight) in sync.
 func (m model) setFocus(f panelFocus) model {
+	if m.hiddenInTasklistOnly(f) {
+		return m
+	}
 	m.focus = f
 	m.list = m.list.SetFocused(f == focusTasks)
 	m.projects = m.projects.SetFocused(f == focusProjects)
 	m.tags = m.tags.SetFocused(f == focusTags)
+	// Panel heights follow focus. Resizing only sets sizes (no commands),
+	// so the returned Cmd is nil and safe to drop.
+	if m.width > 0 {
+		m, _ = m.resizePanels()
+	}
 	return m
+}
+
+// nextVisibleFocus/prevVisibleFocus step through focusCycle, skipping
+// panels hidden on a short terminal.
+func (m model) nextVisibleFocus() panelFocus {
+	f := nextFocus(m.focus)
+	for m.hiddenInTasklistOnly(f) {
+		f = nextFocus(f)
+	}
+	return f
+}
+
+func (m model) prevVisibleFocus() panelFocus {
+	f := prevFocus(m.focus)
+	for m.hiddenInTasklistOnly(f) {
+		f = prevFocus(f)
+	}
+	return f
 }
 
 // applyProjectSelection updates m.filter from a Projects-panel entry label
@@ -918,12 +966,9 @@ func (m model) applyProjectSelection(label string) (model, tea.Cmd, bool) {
 // gridDims computes the panel grid's column widths and left-column row
 // heights from the model's last known terminal size, falling back to sane
 // defaults if no tea.WindowSizeMsg has been received yet (e.g. in tests
-// that call View directly). The left column's 3 rows use static
-// proportions rather than an even split: Status is a fixed single-line
-// panel, and of the remaining height Tasks gets about two-thirds (half,
-// plus a third of what would otherwise go to the bottom row) since it's
-// the most important panel, with the bottom Projects/Tags row getting the
-// rest.
+// that call View directly). The left column's 3 rows are split by
+// leftColumnHeights, which gives the focused panel the extra space; on a
+// short terminal (see tasklistOnly) Tasks gets the whole column.
 func (m model) gridDims() (leftWidth, rightWidth, statusHeight, tasksHeight, bottomHeight, fullHeight int) {
 	width := m.width
 	if width <= 0 {
@@ -939,21 +984,67 @@ func (m model) gridDims() (leftWidth, rightWidth, statusHeight, tasksHeight, bot
 	rightWidth = width - leftWidth
 	fullHeight = height
 
-	statusHeight = m.suggestedPanelHeight()
-	tasksHeight = height / 2
-	bottomHeight = height - statusHeight - tasksHeight
-	if bottomHeight < 0 {
-		bottomHeight = 0
+	if m.tasklistOnly() {
+		return leftWidth, rightWidth, 0, height, 0, fullHeight
 	}
-
-	// Shift some of the Projects/Tags row's height over to Tasks, since
-	// Tasks is the more important panel and benefits more from the extra
-	// vertical space, while still leaving Projects/Tags a usable amount.
-	shift := bottomHeight / 3
-	tasksHeight += shift
-	bottomHeight -= shift
-
+	statusHeight, tasksHeight, bottomHeight = leftColumnHeights(height, m.focus, len(m.suggestions()))
 	return leftWidth, rightWidth, statusHeight, tasksHeight, bottomHeight, fullHeight
+}
+
+// tasklistOnly reports whether the terminal is too short for the full
+// grid, in which case only Tasks (and Details) are shown.
+func (m model) tasklistOnly() bool {
+	_, height := m.screenDims()
+	return height < tasklistOnlyBelow
+}
+
+// hiddenInTasklistOnly reports whether f is hidden (and so unfocusable)
+// because the terminal is short.
+func (m model) hiddenInTasklistOnly(f panelFocus) bool {
+	if !m.tasklistOnly() {
+		return false
+	}
+	return f == focusStatus || f == focusProjects || f == focusTags
+}
+
+// suggestedRows is how many content rows the Suggested panel shows given
+// its suggestion count: up to maxSuggestions while focused, otherwise one.
+func suggestedRows(focus panelFocus, suggestions int) int {
+	if focus != focusStatus {
+		return suggestedUnfocusedRows
+	}
+	return min(max(suggestions, 1), maxSuggestions)
+}
+
+// tasksMinHeight is the Tasks panel's smallest outer height in a left
+// column total rows tall.
+func tasksMinHeight(total int) int {
+	return max(tasksMinRows+panelBorderRows, total*tasksMinPercent/100)
+}
+
+// leftColumnHeights splits the left column's total rows between Suggested,
+// Tasks and the Projects/Tags row. Suggested is content-sized (one row
+// unless focused). Of the rest, the focused panel gets the extra space and
+// the others shrink to their floors: Tasks to tasksMinHeight, Projects and
+// Tags (which share a row, so grow together) to minListPanelHeight. Details
+// sits outside the column, so focusing it keeps the Tasks-focused split;
+// Suggested focus uses a two-thirds/one-third split of what remains.
+func leftColumnHeights(total int, focus panelFocus, suggestions int) (status, tasks, bottom int) {
+	status = suggestedRows(focus, suggestions) + panelBorderRows
+	rest := max(total-status, 0)
+	tasksMin := tasksMinHeight(total)
+
+	switch focus {
+	case focusProjects, focusTags:
+		tasks = tasksMin
+	case focusStatus:
+		tasks = rest - rest/3
+	default:
+		tasks = rest - minListPanelHeight
+	}
+	tasks = max(min(tasks, rest-minListPanelHeight), tasksMin)
+	tasks = min(tasks, rest)
+	return status, tasks, rest - tasks
 }
 
 // subColumnWidths splits a row's total width into two side-by-side
@@ -1067,11 +1158,10 @@ func (m model) jumpToSelectedSuggestion() (model, tea.Cmd) {
 	return m.focusTask(m.suggestedTasks[picks[m.selectedSuggestion()].Index])
 }
 
-// suggestedPanelHeight is the Suggested panel's outer height: one content
-// row per suggestion (at least one, for the empty-state message) plus the
-// two border rows.
+// suggestedPanelHeight is the Suggested panel's outer height: its content
+// rows (see suggestedRows) plus the two border rows.
 func (m model) suggestedPanelHeight() int {
-	return max(1, len(m.suggestions())) + 2
+	return suggestedRows(m.focus, len(m.suggestions())) + panelBorderRows
 }
 
 // suggestedContent renders the Suggested panel's body, one line per
@@ -1084,6 +1174,7 @@ func (m model) suggestedContent(width int) string {
 	if len(picks) == 0 {
 		return statusbar.RenderSuggested("", "", "", width, false)
 	}
+	picks = picks[:min(len(picks), suggestedRows(m.focus, len(picks)))]
 	lines := make([]string, len(picks))
 	sel := m.selectedSuggestion()
 	for i, p := range picks {
@@ -1999,6 +2090,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.hiddenInTasklistOnly(m.focus) {
+			m = m.setFocus(focusTasks)
+		}
 		return m.resizePanels()
 	case tea.KeyMsg:
 		// Global bindings apply no matter which panel has focus: they only
@@ -2016,10 +2110,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.setFocus(panelKeyBindings[msg.String()])
 			return m, nil
 		case "tab":
-			m = m.setFocus(nextFocus(m.focus))
+			m = m.setFocus(m.nextVisibleFocus())
 			return m, nil
 		case "shift+tab":
-			m = m.setFocus(prevFocus(m.focus))
+			m = m.setFocus(m.prevVisibleFocus())
 			return m, nil
 		case "a":
 			m.adding = true
@@ -3304,14 +3398,13 @@ func (m model) renderGrid() string {
 		m.tags = m.tags.SetFocused(false)
 	}
 
-	innerLeftWidth, _ := panel.InnerSize(leftWidth, statusHeight)
-	status := panel.Render(panelTitle(focusStatus), m.suggestedContent(innerLeftWidth), leftWidth, statusHeight, statusFocused)
-	tasksPanel := m.list.View()
-	projectsPanel := m.projects.View()
-	tagsPanel := m.tags.View()
-	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, projectsPanel, tagsPanel)
-
-	leftCol := lipgloss.JoinVertical(lipgloss.Left, status, tasksPanel, bottomRow)
+	leftCol := m.list.View()
+	if !m.tasklistOnly() {
+		innerLeftWidth, _ := panel.InnerSize(leftWidth, statusHeight)
+		status := panel.Render(panelTitle(focusStatus), m.suggestedContent(innerLeftWidth), leftWidth, statusHeight, statusFocused)
+		bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, m.projects.View(), m.tags.View())
+		leftCol = lipgloss.JoinVertical(lipgloss.Left, status, leftCol, bottomRow)
+	}
 
 	details := panel.Render(panelTitle(focusDetails), m.detailsPanelContent(), rightWidth, fullHeight, detailsFocused)
 

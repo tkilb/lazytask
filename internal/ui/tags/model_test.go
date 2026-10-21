@@ -179,3 +179,23 @@ func TestModel_View_ScrollsToKeepCursorVisible(t *testing.T) {
 	assert.NotContains(t, view, AnyLabel)
 	assert.Contains(t, view, "21 of 21")
 }
+
+func TestModel_View_UnfocusedCentersCursorFocusedDoesNot(t *testing.T) {
+	// Height 7 gives 5 inner rows. Entry 10 is "tag-09" ((any) is entry 0).
+	m := New().SetTags(manyTags(20))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 7})
+	for i := 0; i < 10; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+
+	unfocused := m.View()
+	assert.Contains(t, unfocused, "tag-07")
+	assert.Contains(t, unfocused, "tag-11", "rows below the cursor are visible")
+	assert.NotContains(t, unfocused, "tag-06")
+	assert.NotContains(t, unfocused, "tag-12")
+
+	focused := m.SetFocused(true).View()
+	assert.Contains(t, focused, "tag-05")
+	assert.Contains(t, focused, "tag-09")
+	assert.NotContains(t, focused, "tag-10", "focused keeps the cursor on the last row")
+}

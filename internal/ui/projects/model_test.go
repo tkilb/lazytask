@@ -276,3 +276,25 @@ func TestModel_View_HighlightsSearchMatch(t *testing.T) {
 	matchStyle := lipgloss.NewStyle().Background(searchMatchColor).Foreground(searchMatchTextColor).Bold(false)
 	assert.Contains(t, view, matchStyle.Render("work"))
 }
+
+func TestModel_View_UnfocusedCentersCursorFocusedDoesNot(t *testing.T) {
+	// Height 7 gives 5 inner rows. Entry 10 is the 9th project (two special
+	// entries come first).
+	m := New().SetProjects(manyProjects(20))
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 7})
+	for i := 0; i < 10; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	}
+	label, _ := m.Selected()
+
+	unfocused := m.View()
+	assert.Contains(t, unfocused, label)
+	focusedView := m.SetFocused(true).View()
+	assert.Contains(t, focusedView, label)
+
+	lines := func(v string) []string { return strings.Split(v, "\n") }
+	// Row 3 of 5 (index 3 including the top border) holds the cursor when centered;
+	// the last content row (index 5) holds it when focused.
+	assert.Contains(t, lines(unfocused)[3], label)
+	assert.Contains(t, lines(focusedView)[5], label)
+}

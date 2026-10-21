@@ -204,7 +204,11 @@ func (m Model) View() string {
 	if visibleRows < 1 {
 		visibleRows = 1
 	}
-	start, end := panel.ScrollWindow(m.cursor, len(entries), visibleRows)
+	scrollWindow := panel.CenteredScrollWindow
+	if m.focused {
+		scrollWindow = panel.ScrollWindow
+	}
+	start, end := scrollWindow(m.cursor, len(entries), visibleRows)
 
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {

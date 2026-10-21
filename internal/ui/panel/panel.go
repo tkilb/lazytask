@@ -147,6 +147,22 @@ func ScrollWindow(cursor, totalItems, visibleRows int) (start, end int) {
 	return start, end
 }
 
+// CenteredScrollWindow is like ScrollWindow, but keeps cursor in the middle
+// of the visible rows (clamped to the list's start and end) instead of
+// scrolling only when the cursor reaches an edge. With an even visibleRows
+// the cursor sits just below the middle. Used by minimized panels, where
+// context above and below the selection matters more than minimal motion.
+func CenteredScrollWindow(cursor, totalItems, visibleRows int) (start, end int) {
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+	if totalItems <= visibleRows {
+		return 0, totalItems
+	}
+	start = min(max(cursor-visibleRows/2, 0), totalItems-visibleRows)
+	return start, start + visibleRows
+}
+
 // InnerSize converts a panel's total outer footprint (border included) into
 // the content width/height available inside the border, clamped to sane
 // minimums. Since the title now lives in the top border line rather than a

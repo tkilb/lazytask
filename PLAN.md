@@ -860,6 +860,15 @@ Tags panel (key 4) has already shipped. Remaining scope:
 - [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
 - [ ] Add tags to the add form, should come before due date
 - [ ] Add '/' search to tags just like as seen in projects
+- [x] Dynamic panel heights (decided 2026-10-21, human sign-off): the focused
+  left-column panel gets the extra rows. Suggested is 1 row unfocused and up
+  to 5 when focused; unfocused Tasks keeps max(8 rows, 40% of the column);
+  Projects/Tags grow together and shrink to 5 content rows, keeping the
+  selection centered in the window while unfocused (`panel.CenteredScrollWindow`); Details focus uses the Tasks-focused split;
+  the `?` popup keeps the underlying focus's layout; no animation. Under 25
+  terminal rows only Tasks (and Details) show, `1`/`3`/`4` are ignored and
+  `tab` skips hidden panels. Code: `leftColumnHeights` in `cmd/lazytask/main.go`;
+  tests in `dynamiclayout_test.go`.
 
 ## 8 Future Ideas
 
