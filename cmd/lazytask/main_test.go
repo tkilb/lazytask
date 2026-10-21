@@ -2879,7 +2879,7 @@ func TestModelUpdate_ProjectRenamedMsgUpdatesFollowingFilterAndRefreshes(t *test
 	newModel, cmd := m.Update(projectRenamedMsg{to: "errands"})
 	m = newModel.(model)
 	require.NotNil(t, cmd)
-	assert.Equal(t, "project:errands", m.filter.taskFilter(), "the active filter should follow the renamed project")
+	assert.Equal(t, []string{"project:errands"}, m.filter.taskFilterArgs(), "the active filter should follow the renamed project")
 
 	msgs := runBatch(cmd)
 	var sawTasks, sawProjects bool

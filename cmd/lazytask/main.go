@@ -1188,14 +1188,11 @@ func (m model) suggestedContent(width int) string {
 }
 
 // taskFilters returns the full set of `task export` filter fragments for
-// the model's current state: the active status tab, plus any project
-// filter selected in the Projects panel.
+// the model's current state: the active status tab, plus any project and
+// tag filter selected in the Projects and Tags panels, each as its own
+// argument.
 func (m model) taskFilters() []string {
-	filters := []string{m.list.StatusFilter()}
-	if pf := m.filter.taskFilter(); pf != "" {
-		filters = append(filters, pf)
-	}
-	return filters
+	return append([]string{m.list.StatusFilter()}, m.filter.taskFilterArgs()...)
 }
 
 // fetchProjects returns a tea.Cmd that loads the distinct project names

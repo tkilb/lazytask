@@ -24,25 +24,20 @@ type filterState struct {
 	tag     *string
 }
 
-// taskFilter returns the `task export` filter fragment for the currently
-// selected project and tag (space-joined, since taskwarrior filter
-// fragments AND together), or "" if neither filter is applied.
-func (f filterState) taskFilter() string {
-	var parts []string
+// taskFilterArgs returns the `task export` filter fragments for the
+// currently selected project and tag, one argument each (taskwarrior ANDs
+// separate arguments, but treats a single argument containing a space as
+// one unparsed word, so they must never be joined), or nil if neither
+// filter is applied.
+func (f filterState) taskFilterArgs() []string {
+	var args []string
 	if f.project != nil {
-		parts = append(parts, "project:"+*f.project)
+		args = append(args, "project:"+*f.project)
 	}
 	if f.tag != nil {
-		parts = append(parts, "+"+*f.tag)
+		args = append(args, "+"+*f.tag)
 	}
-	if len(parts) == 0 {
-		return ""
-	}
-	result := parts[0]
-	for _, p := range parts[1:] {
-		result += " " + p
-	}
-	return result
+	return args
 }
 
 // projectOnlyFilter returns the `task export` filter fragment for just
