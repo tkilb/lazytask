@@ -283,6 +283,7 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 			statusbar.Binding{Key: "D", Label: "set due date"},
 			statusbar.Binding{Key: "p", Label: "filter by project"},
 			statusbar.Binding{Key: "t", Label: "filter by tag"},
+			statusbar.Binding{Key: "T", Label: "assign tags (space: check/uncheck, or type a list to replace)"},
 			statusbar.Binding{Key: "ctrl+j/k", Label: "reorder down/up"},
 			statusbar.Binding{Key: "/", Label: "search"},
 			statusbar.Binding{Key: "n/N", Label: "next/prev match (while searching)"},
@@ -390,11 +391,12 @@ type TaskStarter interface {
 	Stop(ctx context.Context, id string) error
 }
 
-// TaskTagger is the subset of the taskwarrior client needed to add/remove a
-// single tag, so it can be stubbed out in tests.
+// TaskTagger is the subset of the taskwarrior client needed to add/remove
+// tags, so it can be stubbed out in tests.
 type TaskTagger interface {
 	AddTag(ctx context.Context, id, tag string) error
 	RemoveTag(ctx context.Context, id, tag string) error
+	ModifyTags(ctx context.Context, id string, add, remove []string) error
 }
 
 // TaskPrioritizer is the subset of the taskwarrior client needed to set a
@@ -575,6 +577,19 @@ type tasksPurgedMsg struct {
 // one, those are NOT automatically rolled back — this mirrors taskPurgeErrMsg's
 // single-task error handling (no partial-failure recovery attempted here).
 type tasksPurgeErrMsg struct {
+	err error
+}
+
+// taskTagsSetMsg carries the result of a successful "T" tag assignment, plus
+// the undo.Action that reverses it and the id of the affected task so the
+// cursor stays on it after the refresh.
+type taskTagsSetMsg struct {
+	id     int
+	action undo.Action
+}
+
+// taskTagsErrMsg carries the error from a failed "T" tag assignment.
+type taskTagsErrMsg struct {
 	err error
 }
 
@@ -800,6 +815,10 @@ type model struct {
 	projectPicker    projects.Model
 	pickingTag       bool
 	tagPicker        tags.Model
+	assigningTags    bool
+	tagAssignPicker  tags.Model
+	tagAssignTyping  bool
+	tagAssignInput   addform.Model
 	reassigning      bool
 	reassignPicker   projects.Model
 	reassignTyping   bool
@@ -1765,6 +1784,39 @@ func setProjectTask(projecter TaskProjectSetter, task taskwarrior.Task, project 
 	}
 }
 
+// tagChanges returns the tags to add to and remove from a task currently
+// carrying current so that it ends up with exactly want, each in the order
+// they appear in want (add) or current (remove).
+func tagChanges(current, want []string) (add, remove []string) {
+	for _, tag := range want {
+		if !slices.Contains(current, tag) && !slices.Contains(add, tag) {
+			add = append(add, tag)
+		}
+	}
+	for _, tag := range current {
+		if !slices.Contains(want, tag) {
+			remove = append(remove, tag)
+		}
+	}
+	return add, remove
+}
+
+// setTagsTask returns a tea.Cmd that adds and removes tags on task in one
+// edit via tagger, returning an undo.Action that applies the opposite edit.
+func setTagsTask(tagger TaskTagger, task taskwarrior.Task, add, remove []string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, id := context.Background(), taskID(task)
+		if err := tagger.ModifyTags(ctx, id, add, remove); err != nil {
+			return taskTagsErrMsg{err: err}
+		}
+		return taskTagsSetMsg{id: task.ID, action: undo.Action{
+			Description: fmt.Sprintf("change tags on task %s", id),
+			Undo:        func() error { return tagger.ModifyTags(context.Background(), id, remove, add) },
+			Redo:        func() error { return tagger.ModifyTags(context.Background(), id, add, remove) },
+		}}
+	}
+}
+
 // reorderEpsilon is the small offset added past a neighbor's effective
 // urgency (Urgency+UrgencyOffset) when computing a moved task's new UrgencyOffset, so
 // it sorts just past that neighbor without otherwise disturbing the list.
@@ -2086,6 +2138,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.pickingTag {
 		return m.updateTagPicking(msg)
 	}
+	if m.assigningTags {
+		return m.updateTagAssigning(msg)
+	}
+	if m.tagAssignTyping {
+		return m.updateTagAssignTyping(msg)
+	}
 	if m.reassigning {
 		return m.updateReassigning(msg)
 	}
@@ -2339,6 +2397,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tagPicker, cmd = m.tagPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
 			m.pickingTag = true
 			return m, cmd
+		case "T":
+			if _, ok := m.list.Selected(); ok {
+				w, h := projectPickerSize(len(m.tags.Tags()) + 1)
+				task, _ := m.list.Selected()
+				m.tagAssignPicker = m.tags.ClearSearch().SetFocused(true).SetTitle("Assign Tags").SetAssignMode(true).SetChecked(task.Tags)
+				var cmd tea.Cmd
+				m.tagAssignPicker, cmd = m.tagAssignPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
+				m.assigningTags = true
+				return m, cmd
+			}
+			return m, nil
 		case "P":
 			if _, ok := m.list.Selected(); ok {
 				w, h := projectPickerSize(len(m.projects.Projects()) + 2)
@@ -2501,6 +2570,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingFocusID = msg.id
 		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), m.scheduleMutationAutoSync())
 	case taskToggleErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskTagsSetMsg:
+		m.undo.Push(msg.action)
+		m.pendingFocusID = msg.id
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+	case taskTagsErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPrioritySetMsg:
@@ -3056,6 +3132,105 @@ func (m model) updateTagPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateTagAssigning handles messages while the "T" tag-assign popup is
+// active. Space toggles the highlighted tag's checkbox. Enter appends the
+// checked tags to the selected task (or just the highlighted tag if none
+// are checked), skipping tags it already has; on the (type tags...) entry it
+// instead opens the replace prompt (see updateTagAssignTyping).
+func (m model) updateTagAssigning(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.assigningTags = false
+			return m, nil
+		case " ":
+			m.tagAssignPicker = m.tagAssignPicker.ToggleChecked()
+			return m, nil
+		case "enter":
+			m.assigningTags = false
+			label, ok := m.tagAssignPicker.Selected()
+			task, hasTask := m.list.Selected()
+			if !ok || !hasTask {
+				return m, nil
+			}
+			if label == tags.TypeLabel {
+				m.tagAssignTyping = true
+				m.tagAssignInput = addform.NewNamed("Assign Tags", "<enter> to replace tags, <esc> to cancel", "e.g. errands, waiting").
+					Focus().SetValue(strings.Join(task.Tags, ", "))
+				return m, m.tagAssignInput.Init()
+			}
+			add, remove := m.checkedTagChanges(task)
+			if len(add) == 0 && len(remove) == 0 {
+				// Nothing was toggled: quick-add the highlighted tag.
+				add, _ = tagChanges(task.Tags, append(slices.Clone(task.Tags), label))
+			}
+			if len(add) == 0 && len(remove) == 0 {
+				return m, nil
+			}
+			return m, setTagsTask(m.tagger, task, add, remove)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.tagAssignPicker, cmd = m.tagAssignPicker.Update(msg)
+	return m, cmd
+}
+
+// checkedTagChanges returns the tags to add to and remove from task so that
+// its tags match the "T" popup's checkboxes. The checkboxes start out
+// reflecting the task's tags, so this is just what the user toggled. Task
+// tags that are not in the popup's list (and so have no checkbox) are left
+// alone.
+func (m model) checkedTagChanges(task taskwarrior.Task) (add, remove []string) {
+	listed := m.tagAssignPicker.Tags()
+	want := m.tagAssignPicker.Checked()
+	for _, tag := range task.Tags {
+		if !slices.Contains(listed, tag) {
+			want = append(want, tag)
+		}
+	}
+	return tagChanges(task.Tags, want)
+}
+
+// updateTagAssignTyping handles messages while the "key in a tag list" prompt
+// (reached via tags.TypeLabel in updateTagAssigning) is focused. The prompt
+// starts with the task's current tags, and enter makes the task's tags
+// exactly the typed list — so submitting an empty prompt clears them all. An
+// invalid name warns and keeps the prompt open; an unchanged list is a no-op.
+func (m model) updateTagAssignTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.tagAssignTyping = false
+			m.tagAssignInput = m.tagAssignInput.Blur()
+			return m, nil
+		case "enter":
+			want, ok := taskform.ParseTags(m.tagAssignInput.Value())
+			if !ok {
+				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Invalid tag: names cannot be empty or start with + or -."})
+				return m, nil
+			}
+			m.tagAssignTyping = false
+			m.tagAssignInput = m.tagAssignInput.Blur()
+			task, hasTask := m.list.Selected()
+			if !hasTask {
+				return m, nil
+			}
+			add, remove := tagChanges(task.Tags, want)
+			if len(add) == 0 && len(remove) == 0 {
+				return m, nil
+			}
+			return m, setTagsTask(m.tagger, task, add, remove)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.tagAssignInput, cmd = m.tagAssignInput.Update(msg)
+	return m, cmd
+}
+
 // updateReassigning handles messages while the task project-reassign popup
 // (opened via "P" from the Tasks panel) is active: navigating/selecting an
 // existing project (or NoneLabel, to clear the task's project) applies
@@ -3393,6 +3568,14 @@ func (m model) View() string {
 
 	if m.pickingTag {
 		view = popup.Overlay(view, m.tagPicker.View(), width, height)
+	}
+
+	if m.assigningTags {
+		view = popup.Overlay(view, m.tagAssignPicker.View(), width, height)
+	}
+
+	if m.tagAssignTyping {
+		view = popup.Overlay(view, m.tagAssignInput.View(), width, height)
 	}
 
 	if m.reassigning {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,6 +36,11 @@ func (s *stubToggler) AddTag(_ context.Context, id, tag string) error {
 }
 func (s *stubToggler) RemoveTag(_ context.Context, id, tag string) error {
 	s.calls = append(s.calls, "remove:"+id+":"+tag)
+	return s.err
+}
+
+func (s *stubToggler) ModifyTags(_ context.Context, id string, add, remove []string) error {
+	s.calls = append(s.calls, fmt.Sprintf("modify:%s:+%v:-%v", id, add, remove))
 	return s.err
 }
 

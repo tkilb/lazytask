@@ -270,9 +270,14 @@ func (m Model) TagsInput() string {
 // taskwarrior would read as a filter/removal rather than a tag name), in
 // which case the returned names are only the parseable ones.
 func (m Model) Tags() (names []string, ok bool) {
+	return ParseTags(m.tags.Value())
+}
+
+// ParseTags parses a tag list typed by the user; see Model.Tags for the rules.
+func ParseTags(input string) (names []string, ok bool) {
 	ok = true
 	seen := make(map[string]struct{})
-	fields := strings.FieldsFunc(m.tags.Value(), func(r rune) bool {
+	fields := strings.FieldsFunc(input, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
 	})
 	for _, field := range fields {

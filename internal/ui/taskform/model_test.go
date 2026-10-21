@@ -267,3 +267,17 @@ func TestModel_TabTypingGoesToTagsField(t *testing.T) {
 	assert.Empty(t, m.Description())
 	assert.Empty(t, m.Project())
 }
+
+func TestParseTags(t *testing.T) {
+	names, ok := ParseTags("+work, urgent  work")
+	assert.True(t, ok)
+	assert.Equal(t, []string{"work", "urgent"}, names)
+
+	names, ok = ParseTags("a -b")
+	assert.False(t, ok)
+	assert.Equal(t, []string{"a"}, names, "only the parseable names are returned")
+
+	names, ok = ParseTags("")
+	assert.True(t, ok)
+	assert.Empty(t, names)
+}

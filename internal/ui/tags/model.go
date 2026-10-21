@@ -5,6 +5,7 @@ package tags
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,6 +18,11 @@ import (
 // all). It is wrapped in `*` rather than parens (unlike projects.AllLabel)
 // to match the "(any)" wording of the requirement this panel implements.
 const AnyLabel = "(any)"
+
+// TypeLabel is the special entry pinned to the top in assign mode (see
+// SetAssignMode): selecting it means "key in a tag list" rather than picking
+// an existing tag.
+const TypeLabel = "(type tags...)"
 
 // minPanelWidth is used when no tea.WindowSizeMsg has been received yet.
 const minPanelWidth = 20
@@ -50,6 +56,11 @@ type Model struct {
 	title   string
 
 	searchQuery string
+
+	// assignMode and checked support the "T" tag-assign popup: entries swap
+	// AnyLabel for TypeLabel, and tag rows get toggleable checkboxes.
+	assignMode bool
+	checked    map[string]bool
 }
 
 // Counts carries the number of tasks behind each selectable entry, so the
@@ -84,6 +95,65 @@ func New() Model {
 func (m Model) SetTitle(title string) Model {
 	m.title = title
 	return m
+}
+
+// SetAssignMode switches the panel between its default entry set (AnyLabel
+// pinned to the top, used by the grid panel and the "t" filter popup) and the
+// assign entry set used by the "T" popup: TypeLabel pinned to the top instead
+// (there is no "(any)" tag to assign), with a checkbox on every tag row.
+// Switching resets the cursor to the top entry and clears any checked tags.
+func (m Model) SetAssignMode(assign bool) Model {
+	m.assignMode = assign
+	m.checked = nil
+	m.cursor = 0
+	return m
+}
+
+// SetChecked checks the given tag names (assign mode only), ignoring any not
+// in the list. Used to start the "T" popup with the task's current tags
+// checked, so unchecking one means removing it.
+func (m Model) SetChecked(names []string) Model {
+	checked := make(map[string]bool, len(names))
+	for _, name := range names {
+		if slices.Contains(m.tags, name) {
+			checked[name] = true
+		}
+	}
+	m.checked = checked
+	return m
+}
+
+// ToggleChecked checks or unchecks the tag under the cursor (assign mode
+// only; the TypeLabel entry cannot be checked).
+func (m Model) ToggleChecked() Model {
+	label, ok := m.Selected()
+	if !m.assignMode || !ok || label == TypeLabel {
+		return m
+	}
+	// Copy on write: Models are values, but the map would otherwise be
+	// shared between every copy made from this one.
+	next := make(map[string]bool, len(m.checked)+1)
+	for k, v := range m.checked {
+		next[k] = v
+	}
+	if next[label] {
+		delete(next, label)
+	} else {
+		next[label] = true
+	}
+	m.checked = next
+	return m
+}
+
+// Checked returns the checked tag names in list order.
+func (m Model) Checked() []string {
+	var names []string
+	for _, tag := range m.tags {
+		if m.checked[tag] {
+			names = append(names, tag)
+		}
+	}
+	return names
 }
 
 // SetTags replaces the underlying distinct tag names (expected already
@@ -216,11 +286,15 @@ func (m Model) HasLabel(label string) bool {
 	return false
 }
 
-// entries returns the full selectable list: AnyLabel pinned to the top,
-// followed by the real tag names.
+// entries returns the full selectable list: AnyLabel (TypeLabel in assign
+// mode) pinned to the top, followed by the real tag names.
 func (m Model) entries() []string {
 	entries := make([]string, 0, len(m.tags)+1)
-	entries = append(entries, AnyLabel)
+	if m.assignMode {
+		entries = append(entries, TypeLabel)
+	} else {
+		entries = append(entries, AnyLabel)
+	}
 	entries = append(entries, m.tags...)
 	return entries
 }
@@ -333,21 +407,32 @@ func (m Model) displayLine(entry string, width int, selected bool) string {
 		base = selectedRowStyle
 	}
 	field := countField(m.count(entry))
+	prefix := ""
+	if m.assignMode {
+		if entry == TypeLabel {
+			field = strings.Repeat(" ", countFieldWidth) // no task count for the special entry
+		} else {
+			prefix = "[ ] "
+			if m.checked[entry] {
+				prefix = "[x] "
+			}
+		}
+	}
 	if width <= 0 {
-		return base.Render(entry + " " + field)
+		return base.Render(prefix + entry + " " + field)
 	}
 	// Reserve a space between name and count field; truncate the name if
 	// the combination doesn't fit the available width.
-	nameWidth := width - countFieldWidth - 1
+	nameWidth := width - countFieldWidth - 1 - len(prefix)
 	if nameWidth < 0 {
 		nameWidth = 0
 	}
 	name := truncate(entry, nameWidth)
-	pad := width - len([]rune(name)) - countFieldWidth
+	pad := width - len(prefix) - len([]rune(name)) - countFieldWidth
 	if pad < 1 {
 		pad = 1
 	}
-	return renderWithMatches(name, m.searchQuery, base, selected) +
+	return base.Render(prefix) + renderWithMatches(name, m.searchQuery, base, selected) +
 		base.Render(strings.Repeat(" ", pad)+field)
 }
 

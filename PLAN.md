@@ -855,8 +855,18 @@ shipped). Human requested this instead run automatically so devices that
 
 Tags panel (key 4) has already shipped. Remaining scope:
 
-- [ ] 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
-      If keyed in, there will be a comma delimited list and the mode will be replacement instead.
+- [x] 'T' from the tasks panel opens an "Assign Tags" popup (done 2026-10-21).
+      List mode: the task's current tags start checked; `space` checks or
+      unchecks a tag and `enter` applies the difference (new checks are added,
+      unchecked existing tags are removed; tags not in the list are left
+      alone). If nothing was toggled, `enter` appends the highlighted tag. The pinned
+      `(type tags...)` entry opens a prompt prefilled with the task's tags;
+      `enter` makes the tags exactly the typed list (replace), an empty prompt
+      clears them all, and an invalid name warns and keeps the prompt open.
+      One `task modify` per change (`Client.ModifyTags`) and one undo step.
+      No `/` search inside this popup. Code: `updateTagAssigning` and
+      `updateTagAssignTyping` in `cmd/lazytask/main.go`, assign mode in
+      `internal/ui/tags`; tests in `cmd/lazytask/tagassign_test.go`.
 - [x] 't' from the tasks panel will open a popup for a quick tag picker for filtering
       (done 2026-10-21): mirrors the `p` project picker. Opens on the current tag
       selection; `enter` applies the filter and syncs the Tags panel, `esc`

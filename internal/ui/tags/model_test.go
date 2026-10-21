@@ -281,3 +281,80 @@ func TestModel_View_HighlightsSearchMatch(t *testing.T) {
 	assert.NotEqual(t, plain, highlighted, "match is styled")
 	assert.Equal(t, ansi.Strip(plain), ansi.Strip(highlighted), "same text either way")
 }
+
+func TestModel_AssignMode_EntriesPinTypeLabelInsteadOfAny(t *testing.T) {
+	m := New().SetTags([]string{"home", "work"}).SetAssignMode(true)
+
+	label, ok := m.Selected()
+	require.True(t, ok)
+	assert.Equal(t, TypeLabel, label, "opens on the (type tags...) entry")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	label, _ = m.Selected()
+	assert.Equal(t, "home", label)
+	assert.False(t, m.HasLabel(AnyLabel), "(any) makes no sense when assigning")
+}
+
+func TestModel_AssignMode_ToggleChecked(t *testing.T) {
+	m := New().SetTags([]string{"a", "b", "c"}).SetAssignMode(true)
+
+	m = m.ToggleChecked()
+	assert.Empty(t, m.Checked(), "the (type tags...) entry cannot be checked")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // a
+	m = m.ToggleChecked()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // b
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // c
+	m = m.ToggleChecked()
+	assert.Equal(t, []string{"a", "c"}, m.Checked(), "in list order")
+
+	m = m.ToggleChecked() // uncheck c
+	assert.Equal(t, []string{"a"}, m.Checked())
+}
+
+func TestModel_AssignMode_CheckedIsNotSharedAcrossCopies(t *testing.T) {
+	base := New().SetTags([]string{"a"}).SetAssignMode(true)
+	base, _ = base.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	checked := base.ToggleChecked()
+	other := base.ToggleChecked().ToggleChecked()
+	assert.Equal(t, []string{"a"}, checked.Checked())
+	assert.Empty(t, other.Checked())
+	assert.Empty(t, base.Checked(), "the original is untouched")
+}
+
+func TestModel_AssignMode_ViewShowsCheckboxesAndNoCountOnTypeEntry(t *testing.T) {
+	m := New().SetTags([]string{"a", "b"}).SetCounts(Counts{All: 5, ByTag: map[string]int{"a": 2, "b": 3}}).SetAssignMode(true)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = m.ToggleChecked()
+
+	view := m.View()
+	assert.Contains(t, view, "[x] a")
+	assert.Contains(t, view, "[ ] b")
+	assert.Contains(t, view, TypeLabel)
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, TypeLabel) {
+			assert.NotContains(t, line, "(0)", "no task count beside the special entry")
+		}
+	}
+}
+
+func TestModel_AssignModeOff_ViewHasNoCheckboxes(t *testing.T) {
+	m := New().SetTags([]string{"a"})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+	assert.NotContains(t, m.View(), "[ ]")
+}
+
+func TestModel_AssignMode_SetCheckedPrechecksListedTagsOnly(t *testing.T) {
+	m := New().SetTags([]string{"a", "b", "c"}).SetAssignMode(true).SetChecked([]string{"c", "gone", "a"})
+	assert.Equal(t, []string{"a", "c"}, m.Checked(), "list order, unknown names ignored")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}) // a
+	m = m.ToggleChecked()
+	assert.Equal(t, []string{"c"}, m.Checked(), "a pre-checked tag can be unchecked")
+}
+
+func TestModel_SetAssignMode_ClearsPriorChecks(t *testing.T) {
+	m := New().SetTags([]string{"a"}).SetAssignMode(true).SetChecked([]string{"a"})
+	assert.Empty(t, m.SetAssignMode(true).Checked())
+}

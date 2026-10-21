@@ -212,11 +212,51 @@ func (c *Client) modifyTag(ctx context.Context, id, tag, sign string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("id must not be empty")
 	}
+	tag, err := validTagName(tag)
+	if err != nil {
+		return err
+	}
+	_, err = c.run(ctx, "rc.confirmation=off", id, "modify", sign+tag)
+	return err
+}
+
+// validTagName trims tag and rejects names taskwarrior would misread as
+// something else (empty, containing whitespace, or starting with a "+"/"-"
+// sign), returning the trimmed name.
+func validTagName(tag string) (string, error) {
 	tag = strings.TrimSpace(tag)
 	if tag == "" || strings.ContainsAny(tag, " \t") || strings.HasPrefix(tag, "+") || strings.HasPrefix(tag, "-") {
-		return fmt.Errorf("invalid tag %q", tag)
+		return "", fmt.Errorf("invalid tag %q", tag)
 	}
-	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", sign+tag)
+	return tag, nil
+}
+
+// ModifyTags adds the tags in add and removes the tags in remove (names
+// without a leading sign) on the task identified by id (a Taskwarrior ID or
+// UUID), in a single `task modify` so the whole change is one atomic edit.
+// Adding a present tag or removing an absent one is a no-op. It is an error
+// to pass no changes at all.
+func (c *Client) ModifyTags(ctx context.Context, id string, add, remove []string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	if len(add) == 0 && len(remove) == 0 {
+		return fmt.Errorf("no tag changes to apply")
+	}
+	args := []string{"rc.confirmation=off", id, "modify"}
+	for _, group := range []struct {
+		names []string
+		sign  string
+	}{{add, "+"}, {remove, "-"}} {
+		for _, name := range group.names {
+			name, err := validTagName(name)
+			if err != nil {
+				return err
+			}
+			args = append(args, group.sign+name)
+		}
+	}
+	_, err := c.run(ctx, args...)
 	return err
 }
 
