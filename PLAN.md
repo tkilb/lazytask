@@ -858,7 +858,13 @@ Tags panel (key 4) has already shipped. Remaining scope:
 - [ ] 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
       If keyed in, there will be a comma delimited list and the mode will be replacement instead.
 - [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
-- [ ] Add tags to the add form, should come before due date
+- [x] Add tags to the add form, should come before due date (done 2026-10-21; moved to after Project at
+      the user's request):
+      a Tags field between Project and Priority; names separated by commas
+      and/or spaces, optional leading `+`, duplicates dropped; an invalid name
+      (empty, or starting with `+`/`-`) blocks submit with a warning. Each tag
+      is sent to `task add` as its own `+tag` argument. Not pre-filled from the
+      active tag filter (unlike Project). Code in `internal/ui/taskform`.
 - [x] Add '/' search to tags just like as seen in projects (done 2026-10-21):
       `/`, `n`/`N`, `esc` in the Tags panel, listed in `?`. A committed search
       or n/N jump moves the tag filter with the cursor, like Projects.

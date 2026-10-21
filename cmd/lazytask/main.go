@@ -2788,6 +2788,14 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 				extraArgs = append(extraArgs, "project:"+project)
 			}
 			extraArgs = append(extraArgs, "priority:"+priority)
+			tagNames, ok := m.add.Tags()
+			if !ok {
+				m.popups = m.popups.Push(popup.Message{Severity: popup.Warning, Text: "Invalid tag: names cannot be empty or start with + or -."})
+				return m, nil
+			}
+			for _, tag := range tagNames {
+				extraArgs = append(extraArgs, "+"+tag)
+			}
 			if dueInput := strings.TrimSpace(m.add.DueInput()); dueInput != "" {
 				due, ok := m.add.ResolveDue()
 				if !ok {

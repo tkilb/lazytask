@@ -40,6 +40,9 @@ func TestModel_TabCyclesFields(t *testing.T) {
 	assert.Equal(t, FieldProject, m.FocusedField())
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, FieldTags, m.FocusedField(), "Tags comes right after Project")
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	assert.Equal(t, FieldPriority, m.FocusedField())
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -88,6 +91,11 @@ func TestModel_TabTypingGoesToFocusedField(t *testing.T) {
 	assert.Equal(t, "chores", m.Project())
 	assert.Equal(t, "Buy milk", m.Description())
 
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Tags
+	m = typeString(t, m, "errands")
+	assert.Equal(t, "errands", m.TagsInput())
+	assert.Equal(t, "chores", m.Project())
+
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
 	m = typeString(t, m, "h")
 	priority, ok := m.Priority()
@@ -118,6 +126,7 @@ func TestModel_Priority(t *testing.T) {
 			m := New().Focus()
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
+			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Tags
 			m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
 			m = typeString(t, m, tt.input)
 
@@ -134,6 +143,7 @@ func TestModel_ResolveDue(t *testing.T) {
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Tags
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Due Date
 	m = typeString(t, m, "2d")
@@ -148,6 +158,7 @@ func TestModel_ResolveDue_Invalid(t *testing.T) {
 	m := New().Focus()
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Annotations
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Project
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Tags
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Priority
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // Due Date
 	m = typeString(t, m, "not-a-date")
@@ -190,9 +201,69 @@ func TestModel_View(t *testing.T) {
 	assert.Contains(t, view, "Annotations")
 	assert.Contains(t, view, "Project")
 	assert.Contains(t, view, "Priority")
+	assert.Contains(t, view, "Tags")
 	assert.Contains(t, view, "Due Date")
 	// Each field is its own bordered box (lazygit-style), so there must be
 	// more than one top/bottom border pair.
-	assert.GreaterOrEqual(t, strings.Count(view, "╭"), 5)
-	assert.GreaterOrEqual(t, strings.Count(view, "╰"), 5)
+	assert.GreaterOrEqual(t, strings.Count(view, "╭"), 6)
+	assert.GreaterOrEqual(t, strings.Count(view, "╰"), 6)
+}
+
+func focusTags(t *testing.T, m Model) Model {
+	t.Helper()
+	for i := 0; m.FocusedField() != FieldTags && i < int(fieldCount); i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	}
+	require.Equal(t, FieldTags, m.FocusedField())
+	return m
+}
+
+func TestModel_Tags(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+		ok    bool
+	}{
+		{name: "empty", input: "", want: nil, ok: true},
+		{name: "blank", input: "   ", want: nil, ok: true},
+		{name: "one", input: "work", want: []string{"work"}, ok: true},
+		{name: "comma separated", input: "work,urgent", want: []string{"work", "urgent"}, ok: true},
+		{name: "comma and space", input: "work, urgent", want: []string{"work", "urgent"}, ok: true},
+		{name: "space separated", input: "work urgent", want: []string{"work", "urgent"}, ok: true},
+		{name: "leading plus tolerated", input: "+work, +urgent", want: []string{"work", "urgent"}, ok: true},
+		{name: "duplicates dropped keeping order", input: "b a b", want: []string{"b", "a"}, ok: true},
+		{name: "stray separators ignored", input: ",, work ,", want: []string{"work"}, ok: true},
+		{name: "leading minus invalid", input: "work -urgent", want: []string{"work", "-urgent"}, ok: false},
+		{name: "bare plus invalid", input: "+", want: nil, ok: false},
+		{name: "double plus invalid", input: "++work", want: []string{"++work"}, ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := focusTags(t, New().Focus())
+			m = typeString(t, m, tt.input)
+			got, ok := m.Tags()
+			assert.Equal(t, tt.ok, ok)
+			if tt.ok {
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+func TestModel_TagsClearedByFocusAndReset(t *testing.T) {
+	m := focusTags(t, New().Focus())
+	m = typeString(t, m, "work")
+	assert.Equal(t, "work", m.TagsInput())
+
+	assert.Empty(t, m.Reset().TagsInput())
+	assert.Empty(t, m.Focus().TagsInput())
+}
+
+func TestModel_TabTypingGoesToTagsField(t *testing.T) {
+	m := focusTags(t, New().Focus())
+	m = typeString(t, m, "x")
+	assert.Equal(t, "x", m.TagsInput())
+	assert.Empty(t, m.Description())
+	assert.Empty(t, m.Project())
 }

@@ -3102,3 +3102,69 @@ func TestHelpSections_CoversTrimmedStatusBarKeys(t *testing.T) {
 		assert.True(t, documented[key], "expected helpSections to document trimmed key %q across reachable focus/tab states", key)
 	}
 }
+
+// addFormModel returns a model with the add form open, Description filled in
+// and focus moved onto the Tags field, ready for tag text to be typed.
+func addFormModel(adder *stubAdder, description string) model {
+	m := model{reader: &stubReader{}, adder: adder, annotator: &stubAnnotator{}, list: tasklist.New(nil), add: taskform.New(), adding: true}
+	m.add = m.add.Focus()
+	for _, r := range description {
+		nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = nm.(model)
+	}
+	for m.add.FocusedField() != taskform.FieldTags {
+		nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = nm.(model)
+	}
+	return m
+}
+
+func typeIntoAddForm(m model, s string) model {
+	for _, r := range s {
+		nm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = nm.(model)
+	}
+	return m
+}
+
+func TestModelUpdate_AddingSubmitPassesTagsAsSeparatePlusArgs(t *testing.T) {
+	adder := &stubAdder{}
+	m := typeIntoAddForm(addFormModel(adder, "Buy milk"), "work, +urgent")
+
+	nm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = nm.(model)
+	assert.False(t, m.adding)
+	require.NotNil(t, cmd)
+	cmd()
+
+	require.Len(t, adder.extraArgs, 1)
+	assert.Contains(t, adder.extraArgs[0], "+work")
+	assert.Contains(t, adder.extraArgs[0], "+urgent")
+	assert.NotContains(t, adder.extraArgs[0], "+work +urgent", "one argument per tag")
+}
+
+func TestModelUpdate_AddingSubmitWithoutTagsAddsNoTagArgs(t *testing.T) {
+	adder := &stubAdder{}
+	m := addFormModel(adder, "Buy milk")
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	cmd()
+
+	require.Len(t, adder.extraArgs, 1)
+	for _, a := range adder.extraArgs[0] {
+		assert.NotContains(t, a, "+")
+	}
+}
+
+func TestModelUpdate_AddingSubmitInvalidTagWarnsAndKeepsForm(t *testing.T) {
+	adder := &stubAdder{}
+	m := typeIntoAddForm(addFormModel(adder, "Buy milk"), "work -urgent")
+
+	nm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = nm.(model)
+	assert.True(t, m.adding, "form stays open so the tag can be fixed")
+	assert.Nil(t, cmd)
+	assert.Empty(t, adder.descriptions)
+	assert.Equal(t, "work -urgent", m.add.TagsInput())
+}

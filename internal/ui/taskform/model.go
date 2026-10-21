@@ -1,5 +1,5 @@
 // Package taskform implements the lazygit-style multi-field "Add Task"
-// panel: Description, Project, Priority, and Due Date fields, each its own
+// panel: Description, Annotations, Project, Tags, Priority, and Due Date fields, each its own
 // bordered box (matching the look of the Tasks/Projects grid panels), with
 // the currently focused field's border highlighted, tab-navigable, and
 // submitted as one unit rather than as a sequence of separate popups. This
@@ -11,6 +11,7 @@ package taskform
 import (
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -28,6 +29,7 @@ const (
 	FieldDescription Field = iota
 	FieldAnnotations
 	FieldProject
+	FieldTags
 	FieldPriority
 	FieldDueDate
 
@@ -39,6 +41,7 @@ var fieldTitles = [fieldCount]string{
 	FieldDescription: "Description",
 	FieldAnnotations: "Annotations",
 	FieldProject:     "Project",
+	FieldTags:        "Tags",
 	FieldPriority:    "Priority",
 	FieldDueDate:     "Due Date",
 }
@@ -80,6 +83,7 @@ type Model struct {
 	annotations textarea.Model
 	project     textinput.Model
 	priority    textinput.Model
+	tags        textinput.Model
 	due         textinput.Model
 	focused     Field
 	width       int
@@ -127,6 +131,12 @@ func New() Model {
 	priorityInput.CharLimit = 1
 	m.priority = priorityInput
 
+	tagsInput := textinput.New()
+	tagsInput.Prompt = ""
+	tagsInput.Placeholder = "e.g. errands, waiting (comma or space separated)"
+	tagsInput.CharLimit = 256
+	m.tags = tagsInput
+
 	dueInput := textinput.New()
 	dueInput.Prompt = ""
 	dueInput.Placeholder = "e.g. 2d, 1w, 2b, 3/14, or 2026-03-14"
@@ -155,6 +165,8 @@ func (m Model) Focus() Model {
 	m.project.Blur()
 	m.priority.Reset()
 	m.priority.Blur()
+	m.tags.Reset()
+	m.tags.Blur()
 	m.due.Reset()
 	m.due.Blur()
 
@@ -169,6 +181,7 @@ func (m Model) Reset() Model {
 	m.annotations.Reset()
 	m.project.Reset()
 	m.priority.Reset()
+	m.tags.Reset()
 	m.due.Reset()
 	return m
 }
@@ -179,6 +192,7 @@ func (m Model) Blur() Model {
 	m.annotations.Blur()
 	m.project.Blur()
 	m.priority.Blur()
+	m.tags.Blur()
 	m.due.Blur()
 	return m
 }
@@ -194,6 +208,8 @@ func (m Model) Focused() bool {
 		return m.project.Focused()
 	case FieldPriority:
 		return m.priority.Focused()
+	case FieldTags:
+		return m.tags.Focused()
 	default:
 		return m.due.Focused()
 	}
@@ -242,6 +258,38 @@ func (m Model) Priority() (value string, ok bool) {
 	}
 }
 
+// TagsInput returns the current (untrimmed) Tags field text.
+func (m Model) TagsInput() string {
+	return m.tags.Value()
+}
+
+// Tags parses the Tags field: names separated by commas and/or whitespace,
+// each with at most one leading "+" tolerated (taskwarrior's own syntax),
+// duplicates dropped keeping first-seen order. ok is false if any name is
+// invalid (empty after the "+", or starting with "+" or "-", which
+// taskwarrior would read as a filter/removal rather than a tag name), in
+// which case the returned names are only the parseable ones.
+func (m Model) Tags() (names []string, ok bool) {
+	ok = true
+	seen := make(map[string]struct{})
+	fields := strings.FieldsFunc(m.tags.Value(), func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	for _, field := range fields {
+		name := strings.TrimPrefix(field, "+")
+		if name == "" || strings.HasPrefix(name, "+") || strings.HasPrefix(name, "-") {
+			ok = false
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names, ok
+}
+
 // DueInput returns the current (untrimmed) Due Date field text.
 func (m Model) DueInput() string {
 	return m.due.Value()
@@ -272,6 +320,7 @@ func (m Model) focusField(f Field) Model {
 	m.annotations.Blur()
 	m.project.Blur()
 	m.priority.Blur()
+	m.tags.Blur()
 	m.due.Blur()
 
 	m.focused = f
@@ -284,6 +333,8 @@ func (m Model) focusField(f Field) Model {
 		m.project.Focus()
 	case FieldPriority:
 		m.priority.Focus()
+	case FieldTags:
+		m.tags.Focus()
 	case FieldDueDate:
 		m.due.Focus()
 	}
@@ -339,6 +390,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.project, cmd = m.project.Update(msg)
 	case FieldPriority:
 		m.priority, cmd = m.priority.Update(msg)
+	case FieldTags:
+		m.tags, cmd = m.tags.Update(msg)
 	case FieldDueDate:
 		m.due, cmd = m.due.Update(msg)
 	}
@@ -356,6 +409,7 @@ func (m Model) View() string {
 		m.simpleFieldBox(FieldDescription, m.description.View(), width),
 		m.annotationsBox(width),
 		m.simpleFieldBox(FieldProject, m.project.View(), width),
+		m.simpleFieldBox(FieldTags, m.tags.View(), width),
 		m.simpleFieldBox(FieldPriority, m.priority.View(), width),
 		m.dueDateBox(width),
 	}
