@@ -298,6 +298,7 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 		}
 	case focusProjects:
 		return []statusbar.Binding{
+			{Key: "space", Label: "jump to Tasks"},
 			{Key: "R", Label: "rename project"},
 			{Key: "/", Label: "search"},
 			{Key: "n/N", Label: "next/prev match"},
@@ -2167,6 +2168,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			switch msg.String() {
+			case " ":
+				// The filter already applied as the cursor moved; this
+				// just hands focus to the filtered Tasks list.
+				return m.setFocus(focusTasks), nil
 			case "/":
 				var cmd tea.Cmd
 				m, cmd = m.startSearch("search projects...", searchScopeProjects)

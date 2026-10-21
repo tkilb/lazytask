@@ -159,3 +159,28 @@ func TestHelp_LayoutUsesUnderlyingFocus(t *testing.T) {
 	assert.Equal(t, [3]int{s2, t2, b2}, [3]int{s1, t1, b1})
 	assert.Equal(t, before, m.View(), "closing help leaves the layout unchanged")
 }
+
+func TestProjectsPanel_SpaceJumpsToTasks(t *testing.T) {
+	m := layoutModel(3, focusProjects, 40)
+	m = keyOf(m, " ")
+	assert.Equal(t, focusTasks, m.focus)
+	assert.Len(t, strings.Split(m.View(), "\n"), 40, "layout follows the focus change")
+}
+
+func TestProjectsPanel_SpaceDoesNotChangeFilter(t *testing.T) {
+	m := layoutModel(3, focusProjects, 40)
+	before := m.filter
+	m = keyOf(m, " ")
+	assert.True(t, before.equal(m.filter))
+}
+
+func TestHelp_ProjectsPanelListsSpace(t *testing.T) {
+	m := layoutModel(3, focusProjects, 40)
+	found := false
+	for _, b := range m.helpLocalBindings() {
+		if b.Key == "space" {
+			found = true
+		}
+	}
+	assert.True(t, found, "Projects local help lists space")
+}

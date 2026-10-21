@@ -869,6 +869,12 @@ Tags panel (key 4) has already shipped. Remaining scope:
   terminal rows only Tasks (and Details) show, `1`/`3`/`4` are ignored and
   `tab` skips hidden panels. Code: `leftColumnHeights` in `cmd/lazytask/main.go`;
   tests in `dynamiclayout_test.go`.
+- [x] Projects panel: `space` jumps focus to the Tasks panel (2026-10-21, adhoc).
+  Focus only; the filter already applies as the cursor moves. Listed in the
+  `?` popup. Tests in `dynamiclayout_test.go`.
+- [ ] Tags panel: `space` jumps focus to the Tasks panel, matching Projects.
+  The Tags panel exists but has no `space` binding yet; add it to the
+  Tags-local handler, the `?` popup's Tags section, and tests.
 
 ## 8 Future Ideas
 
