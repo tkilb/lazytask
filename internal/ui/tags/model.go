@@ -23,6 +23,16 @@ const minPanelWidth = 20
 
 var selectedRowStyle = lipgloss.NewStyle().Background(panel.SelectedRowBackground).Bold(true)
 
+// searchMatchColor/searchMatchColorUnfocused highlight the substring
+// matching an active `/` search query, mirroring the Projects and Tasks
+// panels: teal for the current cursor row's match, yellow for every other
+// matching row.
+var (
+	searchMatchColor          = lipgloss.Color("6")
+	searchMatchColorUnfocused = lipgloss.Color("3")
+	searchMatchTextColor      = lipgloss.Color("0")
+)
+
 // Model is a Bubble Tea model rendering a bordered, selectable list of
 // distinct tags, plus the AnyLabel special entry pinned to the top.
 //
@@ -38,6 +48,8 @@ type Model struct {
 	height  int
 	focused bool
 	title   string
+
+	searchQuery string
 }
 
 // Counts carries the number of tasks behind each selectable entry, so the
@@ -95,6 +107,82 @@ func (m Model) SetTags(tagNames []string) Model {
 func (m Model) SetCounts(counts Counts) Model {
 	m.counts = counts
 	return m
+}
+
+// ClearSearch discards the active search query (if any), so the panel stops
+// highlighting matches and NextMatch/PrevMatch become no-ops again. It never
+// moves the cursor.
+func (m Model) ClearSearch() Model {
+	m.searchQuery = ""
+	return m
+}
+
+// HasActiveSearch reports whether a "/" search query is currently active.
+func (m Model) HasActiveSearch() bool {
+	return m.searchQuery != ""
+}
+
+// Search sets query as the active search (matched case-insensitively against
+// each entry's name, including AnyLabel), then jumps the cursor to the
+// nearest match at or after the current position, wrapping around to the top
+// if needed. It returns the updated Model and whether any match was found;
+// the query stays recorded either way so NextMatch/PrevMatch keep working.
+// The entry list itself is never filtered — this only ever moves the cursor.
+func (m Model) Search(query string) (Model, bool) {
+	m.searchQuery = query
+	i, ok := m.findMatch(m.cursor, 1, true)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// NextMatch moves the cursor to the next entry (forward, wrapping) matching
+// the active search query. It is a no-op (ok=false) with no active query or
+// no match.
+func (m Model) NextMatch() (Model, bool) {
+	return m.stepMatch(1)
+}
+
+// PrevMatch moves the cursor to the previous entry (backward, wrapping)
+// matching the active search query, with the same no-op rules as NextMatch.
+func (m Model) PrevMatch() (Model, bool) {
+	return m.stepMatch(-1)
+}
+
+func (m Model) stepMatch(direction int) (Model, bool) {
+	if m.searchQuery == "" {
+		return m, false
+	}
+	i, ok := m.findMatch(m.cursor, direction, false)
+	if ok {
+		m.cursor = i
+	}
+	return m, ok
+}
+
+// findMatch scans the entry list in direction (+1/-1) from start, wrapping
+// around the ends, and returns the index of the first entry whose name
+// contains m.searchQuery (case-insensitive). If includeStart is false the
+// scan begins one step past start, so repeated n/N presses always advance.
+func (m Model) findMatch(start, direction int, includeStart bool) (int, bool) {
+	entries := m.entries()
+	n := len(entries)
+	if n == 0 || m.searchQuery == "" {
+		return 0, false
+	}
+	i := start
+	if !includeStart {
+		i += direction
+	}
+	i = ((i % n) + n) % n
+	for step := 0; step < n; step++ {
+		if strings.Contains(strings.ToLower(entries[i]), strings.ToLower(m.searchQuery)) {
+			return i, true
+		}
+		i = ((i+direction)%n + n) % n
+	}
+	return 0, false
 }
 
 // SelectLabel moves the cursor to the given entry (a tag name, or the
@@ -212,11 +300,7 @@ func (m Model) View() string {
 
 	lines := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		line := m.displayLine(entries[i], innerWidth)
-		if i == m.cursor {
-			line = selectedRowStyle.Render(line)
-		}
-		lines = append(lines, line)
+		lines = append(lines, m.displayLine(entries[i], innerWidth, i == m.cursor))
 	}
 	body := strings.Join(lines, "\n")
 
@@ -239,11 +323,18 @@ const countFieldWidth = 6 // fits up to "(9999)"
 
 // displayLine renders entry's full row: its name, then a fixed-width
 // "(N)" task-count field right-aligned flush against the panel's right
-// edge, so counts form a straight column down the panel.
-func (m Model) displayLine(entry string, width int) string {
+// edge, so counts form a straight column down the panel. When selected is
+// true the row-highlight style is applied across the whole row. Any
+// substring of the name matching an active search query is highlighted
+// (see renderWithMatches).
+func (m Model) displayLine(entry string, width int, selected bool) string {
+	base := lipgloss.NewStyle()
+	if selected {
+		base = selectedRowStyle
+	}
 	field := countField(m.count(entry))
 	if width <= 0 {
-		return entry + " " + field
+		return base.Render(entry + " " + field)
 	}
 	// Reserve a space between name and count field; truncate the name if
 	// the combination doesn't fit the available width.
@@ -256,7 +347,44 @@ func (m Model) displayLine(entry string, width int) string {
 	if pad < 1 {
 		pad = 1
 	}
-	return name + strings.Repeat(" ", pad) + field
+	return renderWithMatches(name, m.searchQuery, base, selected) +
+		base.Render(strings.Repeat(" ", pad)+field)
+}
+
+// renderWithMatches renders s split around every non-overlapping,
+// case-insensitive occurrence of query: matches use base with a highlight
+// background (teal on the cursor row, yellow elsewhere), never bold; the rest
+// uses base as-is. An empty query renders the whole string with base.
+func renderWithMatches(s, query string, base lipgloss.Style, selected bool) string {
+	if query == "" {
+		return base.Render(s)
+	}
+	highlight := searchMatchColorUnfocused
+	if selected {
+		highlight = searchMatchColor
+	}
+	matchStyle := base.Background(highlight).Foreground(searchMatchTextColor).Bold(false)
+
+	lowerS := strings.ToLower(s)
+	lowerQ := strings.ToLower(query)
+
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		idx := strings.Index(lowerS[i:], lowerQ)
+		if idx < 0 {
+			b.WriteString(base.Render(s[i:]))
+			break
+		}
+		idx += i
+		if idx > i {
+			b.WriteString(base.Render(s[i:idx]))
+		}
+		matchEnd := idx + len(query)
+		b.WriteString(matchStyle.Render(s[idx:matchEnd]))
+		i = matchEnd
+	}
+	return b.String()
 }
 
 // countField renders n as "(n)", right-aligned/padded to countFieldWidth.

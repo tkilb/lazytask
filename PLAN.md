@@ -859,7 +859,10 @@ Tags panel (key 4) has already shipped. Remaining scope:
       If keyed in, there will be a comma delimited list and the mode will be replacement instead.
 - [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
 - [ ] Add tags to the add form, should come before due date
-- [ ] Add '/' search to tags just like as seen in projects
+- [x] Add '/' search to tags just like as seen in projects (done 2026-10-21):
+      `/`, `n`/`N`, `esc` in the Tags panel, listed in `?`. A committed search
+      or n/N jump moves the tag filter with the cursor, like Projects.
+      Model in `internal/ui/tags`, wiring and tests in `cmd/lazytask`.
 - [x] Dynamic panel heights (decided 2026-10-21, human sign-off): the focused
   left-column panel gets the extra rows. Suggested is 1 row unfocused and up
   to 5 when focused; unfocused Tasks keeps max(8 rows, 40% of the column);
@@ -872,9 +875,9 @@ Tags panel (key 4) has already shipped. Remaining scope:
 - [x] Projects panel: `space` jumps focus to the Tasks panel (2026-10-21, adhoc).
   Focus only; the filter already applies as the cursor moves. Listed in the
   `?` popup. Tests in `dynamiclayout_test.go`.
-- [ ] Tags panel: `space` jumps focus to the Tasks panel, matching Projects.
-  The Tags panel exists but has no `space` binding yet; add it to the
-  Tags-local handler, the `?` popup's Tags section, and tests.
+- [x] Tags panel: `space` jumps focus to the Tasks panel, matching Projects
+  (focus only; the filter already follows the cursor). Done 2026-10-21; tests
+  in `cmd/lazytask/tagssearch_test.go`.
 
 ## 8 Future Ideas
 

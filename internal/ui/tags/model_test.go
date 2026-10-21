@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -198,4 +201,83 @@ func TestModel_View_UnfocusedCentersCursorFocusedDoesNot(t *testing.T) {
 	assert.Contains(t, focused, "tag-05")
 	assert.Contains(t, focused, "tag-09")
 	assert.NotContains(t, focused, "tag-10", "focused keeps the cursor on the last row")
+}
+
+func TestModel_SearchJumpsToFirstMatchAtOrAfterCursor(t *testing.T) {
+	m := New().SetTags([]string{"home", "work-alpha", "work-beta"})
+
+	m, ok := m.Search("work")
+	require.True(t, ok)
+	label, _ := m.Selected()
+	assert.Equal(t, "work-alpha", label)
+	assert.True(t, m.HasActiveSearch())
+}
+
+func TestModel_SearchIsCaseInsensitiveAndMatchesSpecialEntry(t *testing.T) {
+	m := New().SetTags([]string{"home", "Work"})
+	m, ok := m.Search("WORK")
+	require.True(t, ok)
+	label, _ := m.Selected()
+	assert.Equal(t, "Work", label)
+
+	m, ok = m.Search("any")
+	require.True(t, ok, "wraps around to the (any) entry")
+	label, _ = m.Selected()
+	assert.Equal(t, AnyLabel, label)
+}
+
+func TestModel_SearchNoMatchKeepsCursorAndRecordsQuery(t *testing.T) {
+	m := New().SetTags([]string{"home", "work"})
+	m, ok := m.Search("zzz")
+	assert.False(t, ok)
+	label, _ := m.Selected()
+	assert.Equal(t, AnyLabel, label)
+	assert.True(t, m.HasActiveSearch())
+}
+
+func TestModel_NextPrevMatchWrapAndNoopWithoutQuery(t *testing.T) {
+	m := New().SetTags([]string{"a-1", "b", "a-2"})
+	_, ok := m.NextMatch()
+	assert.False(t, ok, "no active query")
+	_, ok = m.PrevMatch()
+	assert.False(t, ok, "no active query")
+
+	m, _ = m.Search("a-")
+	label, _ := m.Selected()
+	assert.Equal(t, "a-1", label)
+	m, ok = m.NextMatch()
+	require.True(t, ok)
+	label, _ = m.Selected()
+	assert.Equal(t, "a-2", label)
+	m, _ = m.NextMatch()
+	label, _ = m.Selected()
+	assert.Equal(t, "a-1", label, "wraps forward")
+	m, _ = m.PrevMatch()
+	label, _ = m.Selected()
+	assert.Equal(t, "a-2", label, "wraps backward")
+}
+
+func TestModel_ClearSearchKeepsCursor(t *testing.T) {
+	m := New().SetTags([]string{"a", "b"})
+	m, _ = m.Search("b")
+	m = m.ClearSearch()
+	assert.False(t, m.HasActiveSearch())
+	label, _ := m.Selected()
+	assert.Equal(t, "b", label)
+	_, ok := m.NextMatch()
+	assert.False(t, ok)
+}
+
+func TestModel_View_HighlightsSearchMatch(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256) // tests run without a TTY, which strips all styling
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+
+	m := New().SetTags([]string{"alpha", "beta"})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	m, _ = m.Search("alp")
+	highlighted := m.View()
+	plain := m.ClearSearch().View() // same cursor, no highlight
+	assert.NotEqual(t, plain, highlighted, "match is styled")
+	assert.Equal(t, ansi.Strip(plain), ansi.Strip(highlighted), "same text either way")
 }

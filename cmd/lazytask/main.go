@@ -72,6 +72,7 @@ const (
 	searchScopeTasks searchScope = iota
 	searchScopeProjects
 	searchScopeProjectPicker
+	searchScopeTags
 )
 
 // panelTitle returns the display title for a given panel, including its
@@ -300,6 +301,12 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 		return []statusbar.Binding{
 			{Key: "space", Label: "jump to Tasks"},
 			{Key: "R", Label: "rename project"},
+			{Key: "/", Label: "search"},
+			{Key: "n/N", Label: "next/prev match"},
+		}
+	case focusTags:
+		return []statusbar.Binding{
+			{Key: "space", Label: "jump to Tasks"},
 			{Key: "/", Label: "search"},
 			{Key: "n/N", Label: "next/prev match"},
 		}
@@ -2203,16 +2210,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the cursor needs to update the shared filter and refetch Tasks
 		// immediately (no "enter" required).
 		if m.focus == focusTags {
+			switch msg.String() {
+			case " ":
+				// The filter already applied as the cursor moved; this
+				// just hands focus to the filtered Tasks list.
+				return m.setFocus(focusTasks), nil
+			case "/":
+				var cmd tea.Cmd
+				m, cmd = m.startSearch("search tags...", searchScopeTags)
+				return m, cmd
+			case "n":
+				if newTags, ok := m.tags.NextMatch(); ok {
+					m.tags = newTags
+					return m.afterTagsCursorMove()
+				}
+				return m, nil
+			case "N":
+				if newTags, ok := m.tags.PrevMatch(); ok {
+					m.tags = newTags
+					return m.afterTagsCursorMove()
+				}
+				return m, nil
+			case "esc":
+				m.tags = m.tags.ClearSearch()
+				return m, nil
+			}
 			var cmd tea.Cmd
 			m.tags, cmd = m.tags.Update(msg)
-			if label, ok := m.tags.Selected(); ok {
-				newFilter := m.filter.withTagSelection(label)
-				if !newFilter.equal(m.filter) {
-					m.filter = newFilter
-					return m, tea.Batch(cmd, fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
-				}
-			}
-			return m, cmd
+			newM, filterCmd := m.afterTagsCursorMove()
+			return newM, tea.Batch(cmd, filterCmd)
 		}
 		// Suggested-panel-local: move the highlight, or jump to the task.
 		if m.focus == focusStatus {
@@ -3079,8 +3105,11 @@ func (m model) updateSearching(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.applySearch(query)
-			if m.searchScope == searchScopeProjects {
+			switch m.searchScope {
+			case searchScopeProjects:
 				return m.afterProjectsCursorMove()
+			case searchScopeTags:
+				return m.afterTagsCursorMove()
 			}
 			return m, nil
 		}
@@ -3106,6 +3135,23 @@ func (m model) afterProjectsCursorMove() (model, tea.Cmd) {
 	return m, nil
 }
 
+// afterTagsCursorMove applies the Tags panel's filter-follows-cursor
+// behavior: it syncs the shared tag filter to the selected entry and, if that
+// changed the filter, refetches Tasks and persists it. Used after any cursor
+// move, including a "/" search commit or an "n"/"N" match jump.
+func (m model) afterTagsCursorMove() (model, tea.Cmd) {
+	label, ok := m.tags.Selected()
+	if !ok {
+		return m, nil
+	}
+	newFilter := m.filter.withTagSelection(label)
+	if newFilter.equal(m.filter) {
+		return m, nil
+	}
+	m.filter = newFilter
+	return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+}
+
 // applySearch commits query as the active search against whichever list
 // m.searchScope points at.
 func (m *model) applySearch(query string) {
@@ -3114,6 +3160,8 @@ func (m *model) applySearch(query string) {
 		m.projects, _ = m.projects.Search(query)
 	case searchScopeProjectPicker:
 		m.projectPicker, _ = m.projectPicker.Search(query)
+	case searchScopeTags:
+		m.tags, _ = m.tags.Search(query)
 	default:
 		m.list, _ = m.list.Search(query)
 	}
@@ -3127,6 +3175,8 @@ func (m *model) clearSearch() {
 		m.projects = m.projects.ClearSearch()
 	case searchScopeProjectPicker:
 		m.projectPicker = m.projectPicker.ClearSearch()
+	case searchScopeTags:
+		m.tags = m.tags.ClearSearch()
 	default:
 		m.list = m.list.ClearSearch()
 	}
