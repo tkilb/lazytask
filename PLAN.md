@@ -857,7 +857,12 @@ Tags panel (key 4) has already shipped. Remaining scope:
 
 - [ ] 'T' from the tasks panel will open a popup for tagging re-assign, allow for existing tags to be selected from a list. Tags will be appended if selected.
       If keyed in, there will be a comma delimited list and the mode will be replacement instead.
-- [ ] 't' from the tasks panel will open a popup for a quick tag picker for filtering
+- [x] 't' from the tasks panel will open a popup for a quick tag picker for filtering
+      (done 2026-10-21): mirrors the `p` project picker. Opens on the current tag
+      selection; `enter` applies the filter and syncs the Tags panel, `esc`
+      cancels (clearing an active search first), `/`/`n`/`N` search inside the
+      popup. Listed in `?` under Tasks. Code: `updateTagPicking` in
+      `cmd/lazytask/main.go`; tests in `cmd/lazytask/tagpicker_test.go`.
 - [x] Add tags to the add form, should come before due date (done 2026-10-21; moved to after Project at
       the user's request):
       a Tags field between Project and Priority; names separated by commas

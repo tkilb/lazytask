@@ -73,6 +73,7 @@ const (
 	searchScopeProjects
 	searchScopeProjectPicker
 	searchScopeTags
+	searchScopeTagPicker
 )
 
 // panelTitle returns the display title for a given panel, including its
@@ -281,6 +282,7 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 			statusbar.Binding{Key: "h/m/l", Label: "priority: high/medium/low"},
 			statusbar.Binding{Key: "D", Label: "set due date"},
 			statusbar.Binding{Key: "p", Label: "filter by project"},
+			statusbar.Binding{Key: "t", Label: "filter by tag"},
 			statusbar.Binding{Key: "ctrl+j/k", Label: "reorder down/up"},
 			statusbar.Binding{Key: "/", Label: "search"},
 			statusbar.Binding{Key: "n/N", Label: "next/prev match (while searching)"},
@@ -796,6 +798,8 @@ type model struct {
 	datePick         datepick.Model
 	pickingProject   bool
 	projectPicker    projects.Model
+	pickingTag       bool
+	tagPicker        tags.Model
 	reassigning      bool
 	reassignPicker   projects.Model
 	reassignTyping   bool
@@ -886,6 +890,7 @@ func initialModel() model {
 		datePick:         datepick.New(),
 		projects:         projects.New(),
 		projectPicker:    projects.New(),
+		tagPicker:        tags.New(),
 		reassignPicker:   projects.New(),
 		knownProjects:    make(map[string]struct{}),
 		tags:             tags.New(),
@@ -2078,6 +2083,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.pickingProject {
 		return m.updateProjectPicking(msg)
 	}
+	if m.pickingTag {
+		return m.updateTagPicking(msg)
+	}
 	if m.reassigning {
 		return m.updateReassigning(msg)
 	}
@@ -2323,6 +2331,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.projectPicker, cmd = m.projectPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
 			m.pickingProject = true
+			return m, cmd
+		case "t":
+			w, h := projectPickerSize(len(m.tags.Tags()) + 1)
+			m.tagPicker = m.tags.SetFocused(true).SetTitle("Tag Filter")
+			var cmd tea.Cmd
+			m.tagPicker, cmd = m.tagPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
+			m.pickingTag = true
 			return m, cmd
 		case "P":
 			if _, ok := m.list.Selected(); ok {
@@ -2991,6 +3006,56 @@ func (m model) updateProjectPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateTagPicking handles messages while the quick tag-filter popup
+// (opened via "t" from the Tasks panel) is active. It mirrors
+// updateProjectPicking: moving the cursor doesn't touch the shared filter —
+// it is only applied on "enter" — so "esc" discards an in-progress
+// selection, or, while a "/" search is active, clears the search first and
+// only closes the popup on a second "esc".
+func (m model) updateTagPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.searching {
+		return m.updateSearching(msg)
+	}
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "/":
+			var cmd tea.Cmd
+			m, cmd = m.startSearch("search tags...", searchScopeTagPicker)
+			return m, cmd
+		case "n":
+			if newPicker, ok := m.tagPicker.NextMatch(); ok {
+				m.tagPicker = newPicker
+			}
+			return m, nil
+		case "N":
+			if newPicker, ok := m.tagPicker.PrevMatch(); ok {
+				m.tagPicker = newPicker
+			}
+			return m, nil
+		case "esc":
+			if m.tagPicker.HasActiveSearch() {
+				m.tagPicker = m.tagPicker.ClearSearch()
+				return m, nil
+			}
+			m.pickingTag = false
+			return m, nil
+		case "enter":
+			m.pickingTag = false
+			label, ok := m.tagPicker.Selected()
+			if !ok {
+				return m, nil
+			}
+			m.tags = m.tags.SelectLabel(label)
+			return m.afterTagsCursorMove()
+		}
+	}
+
+	var cmd tea.Cmd
+	m.tagPicker, cmd = m.tagPicker.Update(msg)
+	return m, cmd
+}
+
 // updateReassigning handles messages while the task project-reassign popup
 // (opened via "P" from the Tasks panel) is active: navigating/selecting an
 // existing project (or NoneLabel, to clear the task's project) applies
@@ -3170,6 +3235,8 @@ func (m *model) applySearch(query string) {
 		m.projectPicker, _ = m.projectPicker.Search(query)
 	case searchScopeTags:
 		m.tags, _ = m.tags.Search(query)
+	case searchScopeTagPicker:
+		m.tagPicker, _ = m.tagPicker.Search(query)
 	default:
 		m.list, _ = m.list.Search(query)
 	}
@@ -3185,6 +3252,8 @@ func (m *model) clearSearch() {
 		m.projectPicker = m.projectPicker.ClearSearch()
 	case searchScopeTags:
 		m.tags = m.tags.ClearSearch()
+	case searchScopeTagPicker:
+		m.tagPicker = m.tagPicker.ClearSearch()
 	default:
 		m.list = m.list.ClearSearch()
 	}
@@ -3320,6 +3389,10 @@ func (m model) View() string {
 
 	if m.pickingProject {
 		view = popup.Overlay(view, m.projectPicker.View(), width, height)
+	}
+
+	if m.pickingTag {
+		view = popup.Overlay(view, m.tagPicker.View(), width, height)
 	}
 
 	if m.reassigning {
