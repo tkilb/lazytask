@@ -92,6 +92,20 @@ type appConfig struct {
 	Sync struct {
 		Git GitSyncConfig `yaml:"git"`
 	} `yaml:"sync"`
+	UI UIConfig `yaml:"ui"`
+}
+
+// UIConfig holds interface settings from the app config's ui.* keys.
+type UIConfig struct {
+	// Mouse enables mouse support. A pointer so an unset key (nil) can
+	// default to enabled while an explicit false still disables it.
+	Mouse *bool `yaml:"mouse"`
+}
+
+// MouseEnabled reports whether mouse support is on: true unless ui.mouse is
+// explicitly set to false.
+func (c UIConfig) MouseEnabled() bool {
+	return c.Mouse == nil || *c.Mouse
 }
 
 // State is the set of UI state persisted between sessions.
@@ -150,6 +164,39 @@ func appConfigPath() (string, error) {
 	return filepath.Join(home, ".config", appConfigDirName, appConfigFileName), nil
 }
 
+// readAppConfig reads and parses the YAML app config file. A missing file
+// yields a zero-value appConfig; a malformed one is an error.
+func readAppConfig() (appConfig, error) {
+	var cfg appConfig
+	path, err := appConfigPath()
+	if err != nil {
+		return cfg, err
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return cfg, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// LoadUIConfig reads the ui.* settings from the YAML app config file. A
+// missing file returns the defaults (mouse enabled).
+func LoadUIConfig() (UIConfig, error) {
+	cfg, err := readAppConfig()
+	if err != nil {
+		return UIConfig{}, err
+	}
+	return cfg.UI, nil
+}
+
 // LoadGitSyncConfig reads sync.git.* settings from lazytask's YAML app
 // config file (~/.config/lazytask/config.yaml). A missing file is not an
 // error — it returns a zero-value GitSyncConfig, meaning "git-sync is not
@@ -157,22 +204,9 @@ func appConfigPath() (string, error) {
 // config is more likely a typo the user should know about than a normal
 // "not set up yet" state.
 func LoadGitSyncConfig() (GitSyncConfig, error) {
-	path, err := appConfigPath()
+	cfg, err := readAppConfig()
 	if err != nil {
 		return GitSyncConfig{}, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return GitSyncConfig{}, nil
-		}
-		return GitSyncConfig{}, fmt.Errorf("reading %s: %w", path, err)
-	}
-
-	var cfg appConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return GitSyncConfig{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
 	// Expand a leading "~/" ourselves rather than relying on Taskwarrior's

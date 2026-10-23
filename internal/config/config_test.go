@@ -276,3 +276,33 @@ func TestSyncSecretPath_DefaultAndOverride(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, "custom", "secret-file"), overridePath)
 }
+
+func TestLoadUIConfig_MouseDefaultsToEnabled(t *testing.T) {
+	configDir := withTempAppConfigDir(t)
+
+	got, err := LoadUIConfig()
+	require.NoError(t, err)
+	assert.True(t, got.MouseEnabled())
+
+	writeAppConfig(t, configDir, "sync:\n  git:\n    branch: main\n")
+	got, err = LoadUIConfig()
+	require.NoError(t, err)
+	assert.True(t, got.MouseEnabled(), "unset key keeps the default")
+}
+
+func TestLoadUIConfig_MouseCanBeDisabled(t *testing.T) {
+	configDir := withTempAppConfigDir(t)
+	writeAppConfig(t, configDir, "ui:\n  mouse: false\n")
+
+	got, err := LoadUIConfig()
+	require.NoError(t, err)
+	assert.False(t, got.MouseEnabled())
+}
+
+func TestLoadUIConfig_MalformedFileErrors(t *testing.T) {
+	configDir := withTempAppConfigDir(t)
+	writeAppConfig(t, configDir, "ui: [unclosed")
+
+	_, err := LoadUIConfig()
+	assert.Error(t, err)
+}

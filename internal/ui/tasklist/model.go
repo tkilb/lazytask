@@ -367,6 +367,54 @@ func (m Model) PrevStatus() Model {
 	return m.setStatus((int(m.status) - 1 + len(statusTabs)) % len(statusTabs))
 }
 
+// TabAt maps a column within the panel (0 = left border) to the status tab
+// drawn in the title there.
+func (m Model) TabAt(x int) (StatusTab, bool) {
+	width := m.width
+	if width <= 0 {
+		width = minPanelWidth
+	}
+	innerWidth, _ := panel.InnerSize(width, m.height)
+	i, ok := panel.TabAt(m.panelTabs(), max(innerWidth, 20), x)
+	if !ok {
+		return 0, false
+	}
+	return statusTabs[i], true
+}
+
+// SelectTab switches to tab t, resetting the cursor like NextStatus.
+func (m Model) SelectTab(t StatusTab) Model {
+	return m.setStatus(int(t))
+}
+
+// RowAt maps a row within the panel (0 = top border) to the task index
+// drawn there. The header occupies the first body row, so tasks start at
+// row 2. It reports false over the borders, header, or past the last task.
+func (m Model) RowAt(row int) (int, bool) {
+	width := m.width
+	if width <= 0 {
+		width = minPanelWidth
+	}
+	_, innerHeight := panel.InnerSize(width, m.height)
+	return panel.ListRowAt(row-2, m.cursor, len(m.tasks), max(innerHeight-1, 1), m.focused)
+}
+
+// SelectIndex moves the cursor to task i, ignoring out-of-range values.
+func (m Model) SelectIndex(i int) Model {
+	if i >= 0 && i < len(m.tasks) {
+		m.cursor = i
+	}
+	return m
+}
+
+func (m Model) panelTabs() []panel.Tab {
+	tabs := make([]panel.Tab, len(statusTabs))
+	for i, t := range statusTabs {
+		tabs[i] = panel.Tab{Label: t.Label(), Active: t == m.status}
+	}
+	return tabs
+}
+
 func (m Model) setStatus(i int) Model {
 	m.status = statusTabs[i]
 	m.cursor = 0
@@ -445,16 +493,11 @@ func (m Model) View() string {
 
 	body := b.String()
 
-	tabs := make([]panel.Tab, len(statusTabs))
-	for i, t := range statusTabs {
-		tabs[i] = panel.Tab{Label: t.Label(), Active: t == m.status}
-	}
-
 	footer := ""
 	if len(m.tasks) > 0 {
 		footer = fmt.Sprintf("%d of %d", m.cursor+1, len(m.tasks))
 	}
-	return panel.FrameTabs('2', tabs, body, innerWidth, innerHeight, m.focused, footer)
+	return panel.FrameTabs('2', m.panelTabs(), body, innerWidth, innerHeight, m.focused, footer)
 }
 
 // formatRow lays out the fixed-width columns used by both the header and

@@ -158,3 +158,47 @@ func TestCenteredScrollWindow_CursorAlwaysWithinWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestTabAt_MapsColumnsToTabs(t *testing.T) {
+	tabs := []Tab{{Label: "Todo"}, {Label: "Done"}, {Label: "Deleted"}}
+	// "╭──[2]-Todo - Done - Deleted": Todo at 7-10, Done at 14-17, Deleted at 21-27.
+	tests := []struct {
+		x    int
+		want int
+		ok   bool
+	}{
+		{0, 0, false}, {6, 0, false},
+		{7, 0, true}, {10, 0, true}, {11, 0, false}, {13, 0, false},
+		{14, 1, true}, {17, 1, true},
+		{21, 2, true}, {27, 2, true}, {28, 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := TabAt(tabs, 60, tt.x)
+		assert.Equal(t, tt.ok, ok, "x=%d", tt.x)
+		if tt.ok {
+			assert.Equal(t, tt.want, got, "x=%d", tt.x)
+		}
+	}
+}
+
+func TestTabAt_NarrowPanelHasNoTabs(t *testing.T) {
+	_, ok := TabAt([]Tab{{Label: "Todo"}, {Label: "Done"}, {Label: "Deleted"}}, 10, 8)
+	assert.False(t, ok)
+}
+
+func TestListRowAt_FollowsScrollWindow(t *testing.T) {
+	// Focused: cursor at the end of 10 items in 4 rows shows items 6-9.
+	i, ok := ListRowAt(0, 9, 10, 4, true)
+	assert.True(t, ok)
+	assert.Equal(t, 6, i)
+	// Unfocused windows are centered on the cursor: cursor 5 shows 3-6.
+	i, ok = ListRowAt(3, 5, 10, 4, false)
+	assert.True(t, ok)
+	assert.Equal(t, 6, i)
+	_, ok = ListRowAt(4, 5, 10, 4, false)
+	assert.False(t, ok)
+	_, ok = ListRowAt(-1, 0, 10, 4, true)
+	assert.False(t, ok)
+	_, ok = ListRowAt(2, 0, 2, 4, true)
+	assert.False(t, ok, "past the last item")
+}

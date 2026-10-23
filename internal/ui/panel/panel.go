@@ -353,6 +353,53 @@ func topBorderTabs(number rune, tabs []Tab, width int, focused bool, lineStyle l
 	return b.String()
 }
 
+// TabAt maps a column x, measured from the panel's left border (column 0),
+// to the index of the tab drawn there in a FrameTabs title of the given
+// inner width. It reports false over the border, the "[n]-" prefix, the
+// " - " separators, or when the tabs don't fit and the title falls back to
+// a plain label. The layout mirrors topBorderTabs.
+func TabAt(tabs []Tab, width, x int) (int, bool) {
+	const (
+		prefixStart = 3 // corner plus the two lead dashes
+		prefixLen   = len("[0]-")
+		sepLen      = len(" - ")
+	)
+	total := prefixLen
+	for i, t := range tabs {
+		if i > 0 {
+			total += sepLen
+		}
+		total += len(t.Label)
+	}
+	if total > width {
+		return 0, false
+	}
+	start := prefixStart + prefixLen
+	for i, t := range tabs {
+		if x >= start && x < start+len(t.Label) {
+			return i, true
+		}
+		start += len(t.Label) + sepLen
+	}
+	return 0, false
+}
+
+// ListRowAt maps a body row (0 = first row under the scroll window's top)
+// to the item index drawn there, using the same window the list's View
+// does: ScrollWindow while focused, CenteredScrollWindow otherwise. It
+// reports false for rows past the last item.
+func ListRowAt(row, cursor, totalItems, visibleRows int, focused bool) (int, bool) {
+	window := CenteredScrollWindow
+	if focused {
+		window = ScrollWindow
+	}
+	start, end := window(cursor, totalItems, visibleRows)
+	if row < 0 || start+row >= end {
+		return 0, false
+	}
+	return start + row, true
+}
+
 // titleLabel formats a panel title for the border line. Titles of the form
 // "<digit> <name>" (the number-key hint, e.g. "1 Status") become
 // "[1]-Status"; any other title is used as-is.

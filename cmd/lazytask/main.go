@@ -2165,6 +2165,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.setFocus(focusTasks)
 		}
 		return m.resizePanels()
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	case tea.KeyMsg:
 		// Global bindings apply no matter which panel has focus: they only
 		// ever touch app lifecycle or panel focus itself, never
@@ -3763,7 +3765,7 @@ func main() {
 	// editor launched by the 'e' key, via tea.ExecProcess) just repaints
 	// the current view in place rather than clearing first, leaving old
 	// frames stacked above the live one.
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(), programOptions()...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running lazytask: %v\n", err)
 		os.Exit(1)

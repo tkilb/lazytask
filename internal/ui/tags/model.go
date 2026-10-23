@@ -316,6 +316,22 @@ func (m Model) Selected() (string, bool) {
 	return entries[m.cursor], true
 }
 
+// RowAt maps a row within the panel (0 = top border) to the entry drawn
+// there, as View lays it out. It reports false over the borders or past
+// the last entry.
+func (m Model) RowAt(row int) (int, bool) {
+	_, innerHeight := panel.InnerSize(max(m.width, minPanelWidth), m.height)
+	return panel.ListRowAt(row-1, m.cursor, len(m.entries()), max(innerHeight, 1), m.focused)
+}
+
+// SelectIndex moves the cursor to entry i, ignoring out-of-range values.
+func (m Model) SelectIndex(i int) Model {
+	if i >= 0 && i < len(m.entries()) {
+		m.cursor = i
+	}
+	return m
+}
+
 // SetFocused records whether the Tags panel currently has focus in the
 // surrounding panel grid, so View can apply the shared focused-panel
 // border highlight (see internal/ui/panel).
