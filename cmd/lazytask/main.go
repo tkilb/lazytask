@@ -2105,6 +2105,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if mouse, ok := msg.(tea.MouseMsg); ok {
+		if nm, cmd, handled := m.updateModalMouse(mouse); handled {
+			return nm, cmd
+		}
+	}
 	if m.adding {
 		return m.updateAdding(msg)
 	}
@@ -3487,109 +3492,8 @@ func (m model) View() string {
 	width, height := m.screenDims()
 	view := m.baseView()
 
-	if m.adding {
-		view = popup.Overlay(view, m.add.View(), width, height)
-	}
-
-	if m.deleting {
-		if task, ok := m.list.Selected(); ok {
-			var text string
-			if m.list.Status() == tasklist.TabTodo {
-				text = fmt.Sprintf("Delete task %d %q?", task.ID, task.Description)
-			} else {
-				text = fmt.Sprintf("Delete %q?", task.Description)
-			}
-			view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
-		}
-	}
-
-	if m.purging {
-		if task, ok := m.list.Selected(); ok {
-			text := fmt.Sprintf("Permanently delete %q? This cannot be undone.", task.Description)
-			view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
-		}
-	}
-
-	if m.purgingAll {
-		n := len(m.list.Tasks())
-		noun := "tasks"
-		if n == 1 {
-			noun = "task"
-		}
-		text := fmt.Sprintf("Permanently delete all %d deleted %s? This cannot be undone.", n, noun)
-		view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
-	}
-
-	if m.completing {
-		if task, ok := m.list.Selected(); ok {
-			var text string
-			if m.list.Status() == tasklist.TabTodo {
-				text = fmt.Sprintf("Mark task %d %q as done?", task.ID, task.Description)
-			} else {
-				text = fmt.Sprintf("Mark %q as done?", task.Description)
-			}
-			view = popup.Overlay(view, popup.SuccessConfirmBox(text, width), width, height)
-		}
-	}
-
-	if m.restoring {
-		if task, ok := m.list.Selected(); ok {
-			var text string
-			if m.list.Status() == tasklist.TabDone {
-				text = fmt.Sprintf("Reopen %q?", task.Description)
-			} else {
-				text = fmt.Sprintf("Restore %q as a todo?", task.Description)
-			}
-			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
-		}
-	}
-
-	if m.renaming {
-		view = popup.Overlay(view, m.renameInput.View(), width, height)
-	}
-
-	if m.renameConfirm {
-		if m.renameMerging {
-			text := fmt.Sprintf(
-				"Renaming project %q to %q will merge its tasks into the existing project %q (including done/deleted tasks). This cannot be undone. Continue?",
-				m.renameFrom, m.renameTo, m.renameTo)
-			view = popup.Overlay(view, popup.DangerConfirmBox(text, width), width, height)
-		} else {
-			text := fmt.Sprintf("Rename project %q to %q? This updates every task in this project, including done/deleted ones.", m.renameFrom, m.renameTo)
-			view = popup.Overlay(view, popup.ConfirmBox(text, width), width, height)
-		}
-	}
-
-	if m.datePicking {
-		view = popup.Overlay(view, m.datePick.View(), width, height)
-	}
-
-	if m.pickingProject {
-		view = popup.Overlay(view, m.projectPicker.View(), width, height)
-	}
-
-	if m.pickingTag {
-		view = popup.Overlay(view, m.tagPicker.View(), width, height)
-	}
-
-	if m.assigningTags {
-		view = popup.Overlay(view, m.tagAssignPicker.View(), width, height)
-	}
-
-	if m.tagAssignTyping {
-		view = popup.Overlay(view, m.tagAssignInput.View(), width, height)
-	}
-
-	if m.reassigning {
-		view = popup.Overlay(view, m.reassignPicker.View(), width, height)
-	}
-
-	if m.reassignTyping {
-		view = popup.Overlay(view, m.reassignInput.View(), width, height)
-	}
-
-	if m.showingHelp {
-		view = popup.Overlay(view, helppopup.Box(m.helpSections(), width, height, m.helpScroll), width, height)
+	if box, _, ok := m.modalBox(width, height); ok {
+		view = popup.Overlay(view, box, width, height)
 	}
 
 	if msg, ok := m.popups.Current(); ok {

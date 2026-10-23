@@ -111,6 +111,31 @@ func Box(msg Message, screenWidth int) string {
 	return renderBox(msg.Severity.String(), msg.Severity.color(), "press any key to dismiss", msg.Text, screenWidth)
 }
 
+const (
+	confirmChoice = "(y/enter) confirm"
+	cancelChoice  = "(n/esc) cancel"
+	choiceGap     = "   "
+	confirmHint   = confirmChoice + choiceGap + cancelChoice
+	// boxContentInset is the columns between a box's left edge and its
+	// content: the border plus one column of padding.
+	boxContentInset = 2
+)
+
+// ConfirmChoiceAt maps a column x, measured from a confirm box's left edge,
+// to the choice drawn there on its hint line: confirm is true for the
+// "(y/enter) confirm" label and false for "(n/esc) cancel". ok is false
+// anywhere else on the line.
+func ConfirmChoiceAt(x int) (confirm, ok bool) {
+	x -= boxContentInset
+	switch {
+	case x >= 0 && x < len(confirmChoice):
+		return true, true
+	case x >= len(confirmChoice)+len(choiceGap) && x < len(confirmHint):
+		return false, true
+	}
+	return false, false
+}
+
 // confirmColor is the border/title color used by ConfirmBox, matching the
 // "x" delete keybinding's destructive intent.
 var confirmColor = lipgloss.Color("214") // orange, same as Warning
@@ -121,7 +146,7 @@ var confirmColor = lipgloss.Color("214") // orange, same as Warning
 // composite it centered over an existing view, mirroring Box's
 // severity-styled popups but for blocking confirmation prompts.
 func ConfirmBox(text string, screenWidth int) string {
-	return renderBox("Confirm", confirmColor, "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
+	return renderBox("Confirm", confirmColor, confirmHint, text, screenWidth)
 }
 
 // DangerConfirmBox draws a yes/no confirmation modal box like ConfirmBox,
@@ -131,7 +156,7 @@ func ConfirmBox(text string, screenWidth int) string {
 // merging their tasks together), so the elevated risk is visually obvious
 // rather than looking like a routine confirmation.
 func DangerConfirmBox(text string, screenWidth int) string {
-	return renderBox("Confirm", Error.color(), "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
+	return renderBox("Confirm", Error.color(), confirmHint, text, screenWidth)
 }
 
 // successColor is the border/title color used by SuccessConfirmBox: the
@@ -142,7 +167,7 @@ var successColor = lipgloss.Color("42") // green
 // but styled green: for confirmations whose action is positive/completing
 // rather than destructive (e.g. marking a task as done).
 func SuccessConfirmBox(text string, screenWidth int) string {
-	return renderBox("Confirm", successColor, "(y/enter) confirm   (n/esc) cancel", text, screenWidth)
+	return renderBox("Confirm", successColor, confirmHint, text, screenWidth)
 }
 
 // renderBox is the shared layout used by Box and ConfirmBox: a bordered box

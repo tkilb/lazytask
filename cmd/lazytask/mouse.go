@@ -116,10 +116,10 @@ func (m model) clickPanel(hit mouseHit) (model, tea.Cmd) {
 // updateMouse handles mouse input on the main screen: a left click focuses
 // the panel under the pointer and selects the row or Tasks tab clicked, and the wheel focuses it then moves its
 // selection, reusing the up/down key handling so the Projects and Tags
-// panels still apply their filters. Modal states never reach here (Update
-// routes them first), and a pending popup blocks the mouse like any input.
+// panels still apply their filters. Modals and popups never reach here (Update
+// routes them to updateModalMouse first).
 func (m model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.popups.Active() || msg.Action != tea.MouseActionPress {
+	if msg.Action != tea.MouseActionPress {
 		return m, nil
 	}
 	hit, ok := m.hitAt(msg.X, msg.Y)

@@ -346,6 +346,34 @@ func (m Model) focusField(f Field) Model {
 	return m
 }
 
+// fieldRows is each field box's outer height in the stacked View, in Field
+// order: bordered single-line fields are 3 rows, Annotations is
+// annotationsRows plus its border, and Due Date adds the preview row.
+var fieldRows = [fieldCount]int{
+	FieldDescription: 3,
+	FieldAnnotations: annotationsRows + 2,
+	FieldProject:     3,
+	FieldTags:        3,
+	FieldPriority:    3,
+	FieldDueDate:     4,
+}
+
+// FocusFieldAtRow focuses the field whose box covers row (0 = the form's
+// top border), leaving focus alone for rows outside the form. It returns
+// whether a field was hit.
+func (m Model) FocusFieldAtRow(row int) (Model, bool) {
+	if row < 0 {
+		return m, false
+	}
+	for f, h := range fieldRows {
+		if row < h {
+			return m.focusField(Field(f)), true
+		}
+		row -= h
+	}
+	return m, false
+}
+
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	return textinput.Blink

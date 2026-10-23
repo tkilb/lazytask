@@ -281,3 +281,31 @@ func TestParseTags(t *testing.T) {
 	assert.True(t, ok)
 	assert.Empty(t, names)
 }
+
+func TestFocusFieldAtRow_MatchesRenderedLayout(t *testing.T) {
+	m := New().Focus()
+	total := 0
+	for _, h := range fieldRows {
+		total += h
+	}
+	assert.Equal(t, total, len(strings.Split(m.View(), "\n")), "row table matches View height")
+
+	tests := []struct {
+		row  int
+		want Field
+		ok   bool
+	}{
+		{0, FieldDescription, true}, {2, FieldDescription, true},
+		{3, FieldAnnotations, true}, {7, FieldAnnotations, true},
+		{8, FieldProject, true}, {11, FieldTags, true},
+		{14, FieldPriority, true}, {17, FieldDueDate, true}, {20, FieldDueDate, true},
+		{21, 0, false}, {-1, 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := m.FocusFieldAtRow(tt.row)
+		assert.Equal(t, tt.ok, ok, "row=%d", tt.row)
+		if ok {
+			assert.Equal(t, tt.want, got.FocusedField(), "row=%d", tt.row)
+		}
+	}
+}

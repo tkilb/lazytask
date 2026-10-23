@@ -55,7 +55,7 @@ The screen is split into a two-column grid, cycled with number keys `0`-`4` or `
 
 ## Mouse
 
-Mouse support is on by default: left-click a panel to focus it (clicking a row in Suggested, Tasks, Projects or Tags also selects it, applying the filter in Projects and Tags; clicking a Todo/Done/Deleted tab switches to it), and scroll the wheel over a panel to focus it and move its selection (in Projects and Tags this applies the filter, like `j`/`k`). Clicks and scrolling are ignored while a popup, picker or form is open. Capturing the mouse changes native text selection; hold `Shift` (or `Option` on macOS terminals) while dragging to select text. To turn it off, set this in `~/.config/lazytask/config.yaml`:
+Mouse support is on by default: left-click a panel to focus it (clicking a row in Suggested, Tasks, Projects or Tags also selects it, applying the filter in Projects and Tags; clicking a Todo/Done/Deleted tab switches to it), and scroll the wheel over a panel to focus it and move its selection (in Projects and Tags this applies the filter, like `j`/`k`). In popups: click a picker row to choose it (in the tag-assign list, to toggle it), click `(y/enter) confirm` or `(n/esc) cancel` on a confirmation, click a field in the add form to focus it, and scroll the wheel to move through pickers and help. Clicking outside a confirmation, picker or help closes it; the add form and text prompts ignore outside clicks so typed text is never lost. Any click dismisses an error/warning popup. Capturing the mouse changes native text selection; hold `Shift` (or `Option` on macOS terminals) while dragging to select text. To turn it off, set this in `~/.config/lazytask/config.yaml`:
 
 ```yaml
 ui:

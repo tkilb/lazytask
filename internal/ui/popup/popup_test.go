@@ -1,7 +1,11 @@
 package popup
 
-import "testing"
-import "strings"
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestModelQueueOrder(t *testing.T) {
 	var m Model
@@ -111,4 +115,32 @@ func TestDangerConfirmBoxContainsText(t *testing.T) {
 	if !contains(out, "Confirm") {
 		t.Errorf("DangerConfirmBox output missing title: %q", out)
 	}
+}
+
+func TestConfirmChoiceAt(t *testing.T) {
+	tests := []struct {
+		x       int
+		confirm bool
+		ok      bool
+	}{
+		{0, false, false}, {1, false, false},
+		{2, true, true}, {2 + len("(y/enter) confirm") - 1, true, true},
+		{2 + len("(y/enter) confirm"), false, false}, // gap
+		{2 + len("(y/enter) confirm") + 3, false, true},
+		{2 + len("(y/enter) confirm   (n/esc) cancel") - 1, false, true},
+		{2 + len("(y/enter) confirm   (n/esc) cancel"), false, false},
+	}
+	for _, tt := range tests {
+		confirm, ok := ConfirmChoiceAt(tt.x)
+		assert.Equal(t, tt.ok, ok, "x=%d", tt.x)
+		if ok {
+			assert.Equal(t, tt.confirm, confirm, "x=%d", tt.x)
+		}
+	}
+}
+
+func TestConfirmChoiceAt_MatchesRenderedHint(t *testing.T) {
+	lines := strings.Split(ConfirmBox("hi", 80), "\n")
+	hint := lines[len(lines)-2]
+	assert.Contains(t, hint, confirmChoice+choiceGap+cancelChoice)
 }
