@@ -84,6 +84,7 @@ ui:
 | `d`             | Mark task done (confirm)                                              |
 | `r`             | Reopen/restore a Done or Deleted task back to Todo (confirm)          |
 | `x`             | Delete a task (Todo/Done) or permanently purge it (Deleted) (confirm) |
+| `X`             | Delete all Done tasks (Done) or permanently purge all (Deleted) (confirm) |
 | `e`             | Edit task in `$EDITOR`                                                |
 | `h` / `m` / `l` | Set the selected task's priority to High / Medium / Low               |
 

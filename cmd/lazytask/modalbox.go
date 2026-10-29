@@ -57,6 +57,16 @@ func (m model) modalBox(width, height int) (string, modalKind, bool) {
 		return popup.DangerConfirmBox(text, width), modalConfirm, true
 	}
 
+	if m.deletingAll {
+		n := len(m.list.Tasks())
+		noun := "tasks"
+		if n == 1 {
+			noun = "task"
+		}
+		text := fmt.Sprintf("Delete all %d done %s?", n, noun)
+		return popup.DangerConfirmBox(text, width), modalConfirm, true
+	}
+
 	if m.completing {
 		if task, ok := m.list.Selected(); ok {
 			var text string

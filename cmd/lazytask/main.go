@@ -268,6 +268,7 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 		case tasklist.TabDone:
 			bindings = append(bindings,
 				statusbar.Binding{Key: "x", Label: "delete"},
+				statusbar.Binding{Key: "X", Label: "delete all done"},
 				statusbar.Binding{Key: "r", Label: "reopen"},
 			)
 		case tasklist.TabDeleted:
@@ -560,6 +561,19 @@ type taskPurgedMsg struct {
 	action undo.Action
 }
 
+// tasksDeletedMsg carries the result of a successful bulk delete (see
+// deleteAllDoneTasks), plus the combined undo.Action that reverses all of
+// them back to Done.
+type tasksDeletedMsg struct {
+	action undo.Action
+}
+
+// tasksDeleteErrMsg carries the error from a failed bulk delete call. Tasks
+// deleted before the failing one are NOT rolled back automatically.
+type tasksDeleteErrMsg struct {
+	err error
+}
+
 // taskPurgeErrMsg carries the error from a failed Purge call.
 type taskPurgeErrMsg struct {
 	err error
@@ -801,6 +815,7 @@ type model struct {
 	deleting         bool
 	purging          bool
 	purgingAll       bool
+	deletingAll      bool
 	completing       bool
 	restoring        bool
 	renaming         bool
@@ -1528,6 +1543,53 @@ func restoreTask(restorer TaskRestorer, doner TaskDoner, deleter TaskDeleter, id
 	}
 }
 
+// deleteAllDoneTasks returns a tea.Cmd that deletes every task in tasks (the
+// Done tab's contents) via deleter, in order. The combined undo.Action's
+// Undo restores each task and marks it done again (see deleteTask), and its
+// Redo deletes them all once more. Returns nil if tasks is empty.
+//
+// If a Delete call fails partway through, earlier deletions are NOT rolled
+// back automatically.
+func deleteAllDoneTasks(deleter TaskDeleter, restorer TaskRestorer, doner TaskDoner, tasks []taskwarrior.Task) tea.Cmd {
+	if len(tasks) == 0 {
+		return nil
+	}
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = taskID(t)
+	}
+	return func() tea.Msg {
+		ctx := context.Background()
+		for _, id := range ids {
+			if err := deleter.Delete(ctx, id); err != nil {
+				return tasksDeleteErrMsg{err: err}
+			}
+		}
+		return tasksDeletedMsg{action: undo.Action{
+			Description: fmt.Sprintf("delete %d done tasks", len(ids)),
+			Undo: func() error {
+				for _, id := range ids {
+					if err := restorer.Restore(ctx, id); err != nil {
+						return err
+					}
+					if err := doner.Done(ctx, id); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			Redo: func() error {
+				for _, id := range ids {
+					if err := deleter.Delete(ctx, id); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		}}
+	}
+}
+
 // purgeTask returns a tea.Cmd that permanently removes task via purger.
 // Unlike Taskwarrior's own purge, this is undoable within lazytask: task's
 // full field set is captured as a JSON snapshot before purging, and the
@@ -2122,6 +2184,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.purgingAll {
 		return m.updatePurgingAll(msg)
 	}
+	if m.deletingAll {
+		return m.updateDeletingAll(msg)
+	}
 	if m.completing {
 		return m.updateCompleting(msg)
 	}
@@ -2366,11 +2431,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "X":
-			// Bulk purge is only offered on the Deleted tab, mirroring
-			// how single-task "x" is only a permanent purge there; on
-			// every other tab this is simply not a bound key.
-			if m.list.Status() == tasklist.TabDeleted && len(m.list.Tasks()) > 0 {
+			// Bulk actions mirror single-task "x": a permanent purge on the
+			// Deleted tab, a reversible delete on the Done tab; on the Todo
+			// tab this is simply not a bound key.
+			if len(m.list.Tasks()) == 0 {
+				return m, nil
+			}
+			switch m.list.Status() {
+			case tasklist.TabDeleted:
 				m.purgingAll = true
+			case tasklist.TabDone:
+				m.deletingAll = true
 			}
 			return m, nil
 		case "e":
@@ -2572,6 +2643,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tasksPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
+	case tasksDeletedMsg:
+		m.undo.Push(msg.action)
+		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+	case tasksDeleteErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
 	case taskToggledMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
@@ -2769,6 +2846,24 @@ func (m model) updatePurgingAll(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, purgeAllTasks(m.purger, m.importer, m.list.Tasks())
 		case "n", "esc":
 			m.purgingAll = false
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
+// updateDeletingAll handles messages while a bulk-delete ("X" on the Done
+// tab) confirmation is pending. Unlike purging this stays reversible: tasks
+// move to the Deleted tab and can be undone back to Done.
+func (m model) updateDeletingAll(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "y", "enter":
+			m.deletingAll = false
+			return m, deleteAllDoneTasks(m.deleter, m.restorer, m.doner, m.list.Tasks())
+		case "n", "esc":
+			m.deletingAll = false
 			return m, nil
 		}
 	}
