@@ -76,7 +76,6 @@ const (
 	searchScopeTags
 	searchScopeTagPicker
 	searchScopeTaskbookPicker
-	searchScopeTaskbookAssignPicker
 )
 
 // panelTitle returns the display title for a given panel, including its
@@ -165,7 +164,7 @@ const (
 var globalBindings = []statusbar.Binding{
 	{Key: "0-4/tab", Label: "panels"},
 	{Key: "a", Label: "add"},
-	{Key: "b", Label: "taskbook"},
+	{Key: "B", Label: "taskbook"},
 	{Key: "u", Label: "undo"},
 	{Key: "ctrl+r", Label: "redo"},
 	{Key: "S", Label: "sync"},
@@ -228,7 +227,7 @@ func (m model) statusBindings() []statusbar.Binding {
 // own Local/Global/Navigation split.
 var helpGlobalBindings = []statusbar.Binding{
 	{Key: "a", Label: "add"},
-	{Key: "b", Label: "taskbook filter"},
+	{Key: "B", Label: "taskbook filter"},
 	{Key: "u", Label: "undo"},
 	{Key: "ctrl+r", Label: "redo"},
 	{Key: "S", Label: "sync"},
@@ -287,7 +286,6 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 			statusbar.Binding{Key: "e", Label: "edit"},
 			statusbar.Binding{Key: "h/m/l", Label: "priority: high/medium/low"},
 			statusbar.Binding{Key: "D", Label: "set due date"},
-			statusbar.Binding{Key: "B", Label: "assign taskbook"},
 			statusbar.Binding{Key: "p", Label: "filter by project"},
 			statusbar.Binding{Key: "P", Label: "reassign project"},
 			statusbar.Binding{Key: "t", Label: "filter by tag"},
@@ -433,13 +431,6 @@ type TaskDueSetter interface {
 // shelling out to the real `task` binary.
 type TaskProjectSetter interface {
 	SetProject(ctx context.Context, id, project string) error
-}
-
-// TaskTaskbookSetter is the subset of the taskwarrior client needed to
-// reassign a task's taskbook, so it can be stubbed out in tests without
-// shelling out to the real `task` binary.
-type TaskTaskbookSetter interface {
-	SetTaskbook(ctx context.Context, id, taskbook string) error
 }
 
 // TaskAnnotator is the subset of the taskwarrior client needed to add an
@@ -688,18 +679,6 @@ type taskProjectErrMsg struct {
 	err error
 }
 
-// taskTaskbookSetMsg carries the result of a successful SetTaskbook call,
-// plus the undo.Action that reverses it.
-type taskTaskbookSetMsg struct {
-	id     int
-	action undo.Action
-}
-
-// taskTaskbookErrMsg carries the error from a failed SetTaskbook call.
-type taskTaskbookErrMsg struct {
-	err error
-}
-
 // taskReorderedMsg carries the result of a successful manual-reorder
 // SetUrgencyOffset call, plus the undo.Action that reverses it (see
 // reorderTask) and the id of the task whose rank changed, so the cursor
@@ -838,7 +817,6 @@ type model struct {
 	reranker         TaskReRanker
 	duer             TaskDueSetter
 	projecter        TaskProjectSetter
-	taskbooker       TaskTaskbookSetter
 	annotator        TaskAnnotator
 	syncer           TaskFullSyncer
 	syncSecretFile   string
@@ -878,10 +856,6 @@ type model struct {
 	reassignInput        addform.Model
 	pickingTaskbook      bool
 	taskbookPicker       taskbooks.Model
-	assigningTaskbook    bool
-	taskbookAssignPicker taskbooks.Model
-	taskbookAssignTyping bool
-	taskbookAssignInput  addform.Model
 	searching            bool
 	searchInput          textinput.Model
 	searchScope          searchScope
@@ -960,7 +934,6 @@ func initialModel() model {
 		reranker:         client,
 		duer:             client,
 		projecter:            client,
-		taskbooker:           client,
 		annotator:            client,
 		syncer:               client,
 		syncSecretFile:       syncSecretFile,
@@ -973,7 +946,6 @@ func initialModel() model {
 		tagPicker:            tags.New(),
 		reassignPicker:       projects.New(),
 		taskbookPicker:       taskbooks.New(),
-		taskbookAssignPicker: taskbooks.New(),
 		knownProjects:        make(map[string]struct{}),
 		tags:                 tags.New(),
 		knownTags:            make(map[string]struct{}),
@@ -1969,29 +1941,6 @@ func setProjectTask(projecter TaskProjectSetter, task taskwarrior.Task, project 
 	}
 }
 
-// setTaskbookTask returns a tea.Cmd that reassigns task's taskbook to
-// taskbook (a real taskbook name, or "" to clear it back to inbox)
-// via taskbooker, returning an undo.Action that reverses it back to the
-// task's prior taskbook.
-func setTaskbookTask(taskbooker TaskTaskbookSetter, task taskwarrior.Task, taskbook string) tea.Cmd {
-	return func() tea.Msg {
-		id := taskID(task)
-		prior := task.Taskbook
-		if err := taskbooker.SetTaskbook(context.Background(), id, taskbook); err != nil {
-			return taskTaskbookErrMsg{err: err}
-		}
-		return taskTaskbookSetMsg{id: task.ID, action: undo.Action{
-			Description: fmt.Sprintf("set task %s taskbook to %q", id, taskbook),
-			Undo: func() error {
-				return taskbooker.SetTaskbook(context.Background(), id, prior)
-			},
-			Redo: func() error {
-				return taskbooker.SetTaskbook(context.Background(), id, taskbook)
-			},
-		}}
-	}
-}
-
 // tagChanges returns the tags to add to and remove from a task currently
 // carrying current so that it ends up with exactly want, each in the order
 // they appear in want (add) or current (remove).
@@ -2370,12 +2319,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.pickingTaskbook {
 		return m.updateTaskbookPicking(msg)
 	}
-	if m.assigningTaskbook {
-		return m.updateTaskbookAssigning(msg)
-	}
-	if m.taskbookAssignTyping {
-		return m.updateTaskbookAssignTyping(msg)
-	}
 	if m.searching {
 		return m.updateSearching(msg)
 	}
@@ -2428,7 +2371,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.add = m.add.SetProject(*m.filter.project)
 			}
 			return m, m.add.Init()
-		case "b":
+		case "B":
 			w, h := projectPickerSize(len(m.taskbookPicker.Taskbooks()) + 2)
 			m.taskbookPicker = m.taskbookPicker.SetFocused(true).SetTitle("Taskbook Filter")
 			m.taskbookPicker = m.taskbookPicker.SelectLabel(m.filter.taskbookLabel())
@@ -2660,21 +2603,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			return m, nil
-		case "B":
-			if task, ok := m.list.Selected(); ok {
-				w, h := projectPickerSize(len(m.taskbookPicker.Taskbooks()) + 2)
-				m.taskbookAssignPicker = m.taskbookPicker.SetFocused(true).SetTitle("Assign Taskbook").SetReassignMode(true)
-				curLabel := task.Taskbook
-				if curLabel == "" {
-					curLabel = taskbooks.NoneLabel
-				}
-				m.taskbookAssignPicker = m.taskbookAssignPicker.SelectLabel(curLabel)
-				var cmd tea.Cmd
-				m.taskbookAssignPicker, cmd = m.taskbookAssignPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
-				m.assigningTaskbook = true
-				return m, cmd
-			}
-			return m, nil
 		case "ctrl+j":
 			if task, ok := m.list.Selected(); ok {
 				if neighbor, ok := m.list.Neighbor(1); ok {
@@ -2788,7 +2716,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskbooksLoadedMsg:
 		merged := m.mergeKnownTaskbooks(msg.taskbooks)
 		m.taskbookPicker = m.taskbookPicker.SetTaskbooks(merged).SetCounts(msg.counts)
-		m.taskbookAssignPicker = m.taskbookAssignPicker.SetTaskbooks(merged).SetCounts(msg.counts)
 		label := m.filter.taskbookLabel()
 		if !m.taskbookPicker.HasLabel(label) {
 			m.filter.taskbook = nil
@@ -2882,13 +2809,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingFocusID = msg.id
 		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskProjectErrMsg:
-		m.popups = m.popups.Push(errPopup(msg.err))
-		return m, nil
-	case taskTaskbookSetMsg:
-		m.undo.Push(msg.action)
-		m.pendingFocusID = msg.id
-		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
-	case taskTaskbookErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskReorderedMsg:
@@ -3617,7 +3537,7 @@ func (m model) updateReassignTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateTaskbookPicking handles messages while the quick taskbook-filter
-// popup (opened via "b") is active.
+// popup (opened via "B") is active.
 func (m model) updateTaskbookPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.searching {
 		return m.updateSearching(msg)
@@ -3674,95 +3594,6 @@ func (m model) updateTaskbookPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.taskbookPicker, cmd = m.taskbookPicker.Update(msg)
-	return m, cmd
-}
-
-// updateTaskbookAssigning handles messages while the task taskbook-assign
-// popup (opened via "B" from the Tasks panel) is active.
-func (m model) updateTaskbookAssigning(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.searching {
-		return m.updateSearching(msg)
-	}
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "/":
-			var cmd tea.Cmd
-			m, cmd = m.startSearch("search taskbooks...", searchScopeTaskbookAssignPicker)
-			return m, cmd
-		case "n":
-			if newPicker, ok := m.taskbookAssignPicker.NextMatch(); ok {
-				m.taskbookAssignPicker = newPicker
-			}
-			return m, nil
-		case "N":
-			if newPicker, ok := m.taskbookAssignPicker.PrevMatch(); ok {
-				m.taskbookAssignPicker = newPicker
-			}
-			return m, nil
-		case "esc":
-			if m.taskbookAssignPicker.HasActiveSearch() {
-				m.taskbookAssignPicker = m.taskbookAssignPicker.ClearSearch()
-				return m, nil
-			}
-			m.assigningTaskbook = false
-			return m, nil
-		case "enter":
-			label, ok := m.taskbookAssignPicker.Selected()
-			if !ok {
-				return m, nil
-			}
-			if label == taskbooks.NewTaskbookLabel {
-				m.assigningTaskbook = false
-				m.taskbookAssignTyping = true
-				m.taskbookAssignInput = addform.NewNamed("Assign Taskbook", "<enter> to assign, <esc> to cancel", "New taskbook name...").Focus()
-				return m, m.taskbookAssignInput.Init()
-			}
-			m.assigningTaskbook = false
-			task, ok := m.list.Selected()
-			if !ok {
-				return m, nil
-			}
-			book := label
-			if label == taskbooks.NoneLabel {
-				book = ""
-			}
-			return m, setTaskbookTask(m.taskbooker, task, book)
-		}
-	}
-
-	var cmd tea.Cmd
-	m.taskbookAssignPicker, cmd = m.taskbookAssignPicker.Update(msg)
-	return m, cmd
-}
-
-// updateTaskbookAssignTyping handles messages while the "key in a new taskbook
-// name" input (reached via NewTaskbookLabel in updateTaskbookAssigning) is focused.
-func (m model) updateTaskbookAssignTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
-			m.taskbookAssignTyping = false
-			m.taskbookAssignInput = m.taskbookAssignInput.Blur()
-			return m, nil
-		case "enter":
-			book := strings.TrimSpace(m.taskbookAssignInput.Value())
-			m.taskbookAssignTyping = false
-			m.taskbookAssignInput = m.taskbookAssignInput.Blur()
-			if book == "" {
-				return m, nil
-			}
-			task, ok := m.list.Selected()
-			if !ok {
-				return m, nil
-			}
-			return m, setTaskbookTask(m.taskbooker, task, book)
-		}
-	}
-
-	var cmd tea.Cmd
-	m.taskbookAssignInput, cmd = m.taskbookAssignInput.Update(msg)
 	return m, cmd
 }
 
@@ -3876,8 +3707,6 @@ func (m *model) applySearch(query string) {
 		m.tagPicker, _ = m.tagPicker.Search(query)
 	case searchScopeTaskbookPicker:
 		m.taskbookPicker, _ = m.taskbookPicker.Search(query)
-	case searchScopeTaskbookAssignPicker:
-		m.taskbookAssignPicker, _ = m.taskbookAssignPicker.Search(query)
 	default:
 		m.list, _ = m.list.Search(query)
 	}
@@ -3897,8 +3726,6 @@ func (m *model) clearSearch() {
 		m.tagPicker = m.tagPicker.ClearSearch()
 	case searchScopeTaskbookPicker:
 		m.taskbookPicker = m.taskbookPicker.ClearSearch()
-	case searchScopeTaskbookAssignPicker:
-		m.taskbookAssignPicker = m.taskbookAssignPicker.ClearSearch()
 	default:
 		m.list = m.list.ClearSearch()
 	}

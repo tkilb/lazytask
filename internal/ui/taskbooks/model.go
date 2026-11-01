@@ -14,14 +14,8 @@ import (
 )
 
 const (
-	// NoneLabel, in reassign mode (see SetReassignMode), clears the task's taskbook
-	// so it becomes non-scoped.
-	NoneLabel = "(none)"
 	// AllLabel clears the taskbook filter entirely (no taskbook filter applied).
 	AllLabel = "(all)"
-	// NewTaskbookLabel, in reassign mode (see SetReassignMode), selects the
-	// "key in a new taskbook name" entry in place of AllLabel.
-	NewTaskbookLabel = "+ New Taskbook"
 
 	// minPanelWidth is used when no tea.WindowSizeMsg has been received yet.
 	minPanelWidth = 20
@@ -45,15 +39,14 @@ type Counts struct {
 // Model is a Bubble Tea model rendering a bordered, selectable list of
 // distinct taskbook names, plus the AllLabel special entry.
 type Model struct {
-	taskbooks    []string
-	counts       Counts
-	cursor       int
-	width        int
-	height       int
-	focused      bool
-	title        string
-	reassignMode bool
-	searchQuery  string
+	taskbooks   []string
+	counts      Counts
+	cursor      int
+	width       int
+	height      int
+	focused     bool
+	title       string
+	searchQuery string
 }
 
 const defaultTitle = "Taskbooks"
@@ -66,21 +59,6 @@ func New() Model {
 // SetTitle overrides the panel title embedded in View's top border.
 func (m Model) SetTitle(title string) Model {
 	m.title = title
-	return m
-}
-
-// SetReassignMode switches the panel between its default filter set
-// (AllLabel pinned to top) and reassign-picker entry set
-// (NoneLabel + NewTaskbookLabel).
-func (m Model) SetReassignMode(reassign bool) Model {
-	m.reassignMode = reassign
-	entries := m.entries()
-	if m.cursor >= len(entries) {
-		m.cursor = len(entries) - 1
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
 	return m
 }
 
@@ -128,11 +106,7 @@ func (m Model) HasLabel(label string) bool {
 // entries returns the full selectable list.
 func (m Model) entries() []string {
 	entries := make([]string, 0, len(m.taskbooks)+2)
-	if m.reassignMode {
-		entries = append(entries, NoneLabel, NewTaskbookLabel)
-	} else {
-		entries = append(entries, AllLabel)
-	}
+	entries = append(entries, AllLabel)
 	entries = append(entries, m.taskbooks...)
 	return entries
 }
@@ -371,8 +345,6 @@ func (m Model) count(entry string) int {
 	switch entry {
 	case AllLabel:
 		return m.counts.All
-	case NoneLabel:
-		return m.counts.Unscoped
 	default:
 		return m.counts.ByTaskbook[entry] + m.counts.Unscoped
 	}

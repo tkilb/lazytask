@@ -11,7 +11,6 @@ import (
 func TestModelEntries(t *testing.T) {
 	m := New().SetTaskbooks([]string{"personal", "work"})
 	assert.True(t, m.HasLabel(AllLabel))
-	assert.False(t, m.HasLabel(NoneLabel))
 	assert.True(t, m.HasLabel("work"))
 	assert.True(t, m.HasLabel("personal"))
 
@@ -23,14 +22,6 @@ func TestModelEntries(t *testing.T) {
 	sel, ok = m.Selected()
 	require.True(t, ok)
 	assert.Equal(t, "work", sel)
-}
-
-func TestModelReassignMode(t *testing.T) {
-	m := New().SetTaskbooks([]string{"work"}).SetReassignMode(true)
-	assert.False(t, m.HasLabel(AllLabel))
-	assert.True(t, m.HasLabel(NoneLabel))
-	assert.True(t, m.HasLabel(NewTaskbookLabel))
-	assert.True(t, m.HasLabel("work"))
 }
 
 func TestModelNavigation(t *testing.T) {
@@ -67,8 +58,6 @@ func TestModelCounts(t *testing.T) {
 	assert.Equal(t, 5, m.count(AllLabel))
 	// "work" shows scoped + unscoped (3 + 2 = 5)
 	assert.Equal(t, 5, m.count("work"))
-	// NoneLabel shows unscoped (2)
-	assert.Equal(t, 2, m.count(NoneLabel))
 }
 
 func TestModelSearch(t *testing.T) {

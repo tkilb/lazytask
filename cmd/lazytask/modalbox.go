@@ -139,14 +139,6 @@ func (m model) modalBox(width, height int) (string, modalKind, bool) {
 		return m.taskbookPicker.View(), modalPicker, true
 	}
 
-	if m.assigningTaskbook {
-		return m.taskbookAssignPicker.View(), modalPicker, true
-	}
-
-	if m.taskbookAssignTyping {
-		return m.taskbookAssignInput.View(), modalInput, true
-	}
-
 	if m.showingHelp {
 		return helppopup.Box(m.helpSections(), width, height, m.helpScroll), modalHelp, true
 	}

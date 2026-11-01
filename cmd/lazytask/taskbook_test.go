@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -17,35 +16,23 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 )
 
-type stubTaskbookSetter struct {
-	calls []struct{ id, book string }
-	err   error
-}
-
-func (s *stubTaskbookSetter) SetTaskbook(_ context.Context, id, taskbook string) error {
-	s.calls = append(s.calls, struct{ id, book string }{id: id, book: taskbook})
-	return s.err
-}
-
-func taskbookTestModel(ts *stubTaskbookSetter, tasks []taskwarrior.Task, knownBooks ...string) model {
+func taskbookTestModel(tasks []taskwarrior.Task, knownBooks ...string) model {
 	return model{
 		list:                 tasklist.New(tasks),
 		focus:                focusTasks,
 		reader:               &stubReader{},
-		taskbooker:           ts,
 		projects:             projects.New(),
 		tags:                 tags.New(),
 		taskbookPicker:       taskbooks.New().SetTaskbooks(knownBooks),
-		taskbookAssignPicker: taskbooks.New().SetTaskbooks(knownBooks),
 	}
 }
 
 func TestTaskbook_PickerOpenAndSelect(t *testing.T) {
-	m := taskbookTestModel(nil, nil, "work", "personal")
+	m := taskbookTestModel(nil, "work", "personal")
 	assert.False(t, m.pickingTaskbook)
 
-	// Press "b" globally
-	m, _ = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	// Press "B" globally
+	m, _ = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
 	assert.True(t, m.pickingTaskbook)
 
 	// Move cursor down from (all) to "work"
@@ -61,84 +48,6 @@ func TestTaskbook_PickerOpenAndSelect(t *testing.T) {
 	require.NotNil(t, m.filter.taskbook)
 	assert.Equal(t, "work", *m.filter.taskbook)
 	assert.NotNil(t, cmd)
-}
-
-func TestTaskbook_AssignExisting(t *testing.T) {
-	st := &stubTaskbookSetter{}
-	task := taskwarrior.Task{ID: 1, UUID: "u1", Description: "Task 1", Status: "pending"}
-	m := taskbookTestModel(st, []taskwarrior.Task{task}, "work", "personal")
-
-	// Press "B" on selected task
-	m, _ = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
-	assert.True(t, m.assigningTaskbook)
-
-	// Select "personal"
-	m.taskbookAssignPicker = m.taskbookAssignPicker.SelectLabel("personal")
-
-	// Press Enter
-	m, cmd := key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	assert.False(t, m.assigningTaskbook)
-	require.NotNil(t, cmd)
-
-	msg := cmd()
-	require.IsType(t, taskTaskbookSetMsg{}, msg)
-	require.Len(t, st.calls, 1)
-	assert.Equal(t, "u1", st.calls[0].id)
-	assert.Equal(t, "personal", st.calls[0].book)
-}
-
-func TestTaskbook_AssignNoneClearsTaskbook(t *testing.T) {
-	st := &stubTaskbookSetter{}
-	task := taskwarrior.Task{ID: 1, UUID: "u1", Description: "Task 1", Status: "pending", Taskbook: "work"}
-	m := taskbookTestModel(st, []taskwarrior.Task{task}, "work")
-
-	// Press "B" on selected task
-	m, _ = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
-	assert.True(t, m.assigningTaskbook)
-
-	// Select "(none)"
-	m.taskbookAssignPicker = m.taskbookAssignPicker.SelectLabel(taskbooks.NoneLabel)
-
-	// Press Enter
-	m, cmd := key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	assert.False(t, m.assigningTaskbook)
-	require.NotNil(t, cmd)
-
-	msg := cmd()
-	require.IsType(t, taskTaskbookSetMsg{}, msg)
-	require.Len(t, st.calls, 1)
-	assert.Equal(t, "u1", st.calls[0].id)
-	assert.Equal(t, "", st.calls[0].book)
-}
-
-func TestTaskbook_AssignNewTaskbook(t *testing.T) {
-	st := &stubTaskbookSetter{}
-	task := taskwarrior.Task{ID: 2, UUID: "u2", Description: "Task 2", Status: "pending"}
-	m := taskbookTestModel(st, []taskwarrior.Task{task}, "work")
-
-	// Press "B"
-	m, _ = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
-	assert.True(t, m.assigningTaskbook)
-
-	// Select "+ New Taskbook"
-	m.taskbookAssignPicker = m.taskbookAssignPicker.SelectLabel(taskbooks.NewTaskbookLabel)
-
-	// Press Enter -> opens typing prompt
-	m, _ = key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	assert.False(t, m.assigningTaskbook)
-	assert.True(t, m.taskbookAssignTyping)
-
-	// Type "health" and submit
-	m = typeText(m, "health")
-	m, cmd := key(m, tea.KeyMsg{Type: tea.KeyEnter})
-	assert.False(t, m.taskbookAssignTyping)
-	require.NotNil(t, cmd)
-
-	msg := cmd()
-	require.IsType(t, taskTaskbookSetMsg{}, msg)
-	require.Len(t, st.calls, 1)
-	assert.Equal(t, "u2", st.calls[0].id)
-	assert.Equal(t, "health", st.calls[0].book)
 }
 
 func TestTaskbook_AddingScopedTaskbook(t *testing.T) {
@@ -219,7 +128,7 @@ func TestTaskbook_PickerScopesTasksProjectsTagsSuggested(t *testing.T) {
 	}
 
 	// Open picker
-	m, _ = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	m, _ = key(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
 	// Move down to "work"
 	m, _ = key(m, tea.KeyMsg{Type: tea.KeyDown})
 	// Press Enter
