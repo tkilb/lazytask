@@ -176,6 +176,17 @@ func (c *Client) SetProject(ctx context.Context, id, project string) error {
 	return err
 }
 
+// SetTaskbook sets the taskbook UDA of the task identified by id (a Taskwarrior
+// ID or UUID) to taskbook. Pass an empty string to clear the taskbook
+// (equivalent to `task <id> modify taskbook:`).
+func (c *Client) SetTaskbook(ctx context.Context, id, taskbook string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	_, err := c.run(ctx, "rc.confirmation=off", id, "modify", "taskbook:"+taskbook)
+	return err
+}
+
 // Start marks the task identified by id (a Taskwarrior ID or UUID) as
 // actively being worked on, setting Taskwarrior's native "start" attribute.
 func (c *Client) Start(ctx context.Context, id string) error {

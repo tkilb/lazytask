@@ -122,22 +122,37 @@ func (c *Client) buildEnv() []string {
 	return env
 }
 
-// EnsureUDA registers the "urgencyoffset" numeric UDA (see Task.UrgencyOffset) in
-// Taskwarrior's config if it isn't already configured as such, so manual
-// reordering (Ctrl+j/Ctrl+k in the Tasks panel) has somewhere to persist
-// its per-task rank offset. Idempotent and safe to call on every startup:
-// it first checks the current value via `task _get` and only writes when
-// it differs, avoiding an unnecessary config file rewrite on every run.
+// EnsureUDA registers lazytask's required UDAs in Taskwarrior's config if
+// they aren't already configured:
+//   - "urgencyoffset" (numeric, see Task.UrgencyOffset) for manual reordering
+//   - "taskbook" (string, see Task.Taskbook) for taskbook namespaces
+// Idempotent and safe to call on every startup: it checks current values via
+// `task _get` and only writes when they differ, avoiding unnecessary config
+// file rewrites on every run.
 func (c *Client) EnsureUDA(ctx context.Context) error {
 	out, err := c.run(ctx, "_get", "rc.uda.urgencyoffset.type")
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(out) == "numeric" {
-		return nil
+	if strings.TrimSpace(out) != "numeric" {
+		if _, err := c.run(ctx, "rc.confirmation=off", "config", "uda.urgencyoffset.type", "numeric"); err != nil {
+			return err
+		}
 	}
-	_, err = c.run(ctx, "rc.confirmation=off", "config", "uda.urgencyoffset.type", "numeric")
-	return err
+
+	tbOut, err := c.run(ctx, "_get", "rc.uda.taskbook.type")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(tbOut) != "string" {
+		if _, err := c.run(ctx, "rc.confirmation=off", "config", "uda.taskbook.type", "string"); err != nil {
+			return err
+		}
+		if _, err := c.run(ctx, "rc.confirmation=off", "config", "uda.taskbook.label", "Taskbook"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GitSyncConfig holds Taskwarrior's git-sync backend settings (see `task`

@@ -117,9 +117,14 @@ func (c UIConfig) MouseEnabled() bool {
 //
 // Tag mirrors filterState.tag: nil means no tag filter is applied, and any
 // other pointer value is a specific tag name.
+//
+// Taskbook mirrors filterState.taskbook: nil means no taskbook filter is
+// applied ((all)), a pointer to "" means inbox tasks ((inbox)), and any
+// other pointer value is a specific taskbook name.
 type State struct {
-	Project *string `json:"project,omitempty"`
-	Tag     *string `json:"tag,omitempty"`
+	Project  *string `json:"project,omitempty"`
+	Tag      *string `json:"tag,omitempty"`
+	Taskbook *string `json:"taskbook,omitempty"`
 }
 
 // Load reads the persisted state from disk. If the file doesn't exist, or

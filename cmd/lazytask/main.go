@@ -29,6 +29,7 @@ import (
 	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/statusbar"
 	"github.com/tkilb/lazytask/internal/ui/tags"
+	"github.com/tkilb/lazytask/internal/ui/taskbooks"
 	"github.com/tkilb/lazytask/internal/ui/taskform"
 	"github.com/tkilb/lazytask/internal/ui/tasklist"
 	"github.com/tkilb/lazytask/internal/undo"
@@ -74,6 +75,8 @@ const (
 	searchScopeProjectPicker
 	searchScopeTags
 	searchScopeTagPicker
+	searchScopeTaskbookPicker
+	searchScopeTaskbookAssignPicker
 )
 
 // panelTitle returns the display title for a given panel, including its
@@ -162,6 +165,7 @@ const (
 var globalBindings = []statusbar.Binding{
 	{Key: "0-4/tab", Label: "panels"},
 	{Key: "a", Label: "add"},
+	{Key: "b", Label: "taskbook"},
 	{Key: "u", Label: "undo"},
 	{Key: "ctrl+r", Label: "redo"},
 	{Key: "S", Label: "sync"},
@@ -224,6 +228,7 @@ func (m model) statusBindings() []statusbar.Binding {
 // own Local/Global/Navigation split.
 var helpGlobalBindings = []statusbar.Binding{
 	{Key: "a", Label: "add"},
+	{Key: "b", Label: "taskbook filter"},
 	{Key: "u", Label: "undo"},
 	{Key: "ctrl+r", Label: "redo"},
 	{Key: "S", Label: "sync"},
@@ -282,7 +287,9 @@ func (m model) helpLocalBindings() []statusbar.Binding {
 			statusbar.Binding{Key: "e", Label: "edit"},
 			statusbar.Binding{Key: "h/m/l", Label: "priority: high/medium/low"},
 			statusbar.Binding{Key: "D", Label: "set due date"},
+			statusbar.Binding{Key: "B", Label: "assign taskbook"},
 			statusbar.Binding{Key: "p", Label: "filter by project"},
+			statusbar.Binding{Key: "P", Label: "reassign project"},
 			statusbar.Binding{Key: "t", Label: "filter by tag"},
 			statusbar.Binding{Key: "T", Label: "assign tags (space: check/uncheck, or type a list to replace)"},
 			statusbar.Binding{Key: "ctrl+j/k", Label: "reorder down/up"},
@@ -428,6 +435,13 @@ type TaskProjectSetter interface {
 	SetProject(ctx context.Context, id, project string) error
 }
 
+// TaskTaskbookSetter is the subset of the taskwarrior client needed to
+// reassign a task's taskbook, so it can be stubbed out in tests without
+// shelling out to the real `task` binary.
+type TaskTaskbookSetter interface {
+	SetTaskbook(ctx context.Context, id, taskbook string) error
+}
+
 // TaskAnnotator is the subset of the taskwarrior client needed to add an
 // annotation to a task, so it can be stubbed out in tests without
 // shelling out to the real `task` binary.
@@ -506,6 +520,17 @@ type tagsLoadedMsg struct {
 
 // tagsErrMsg carries the error from a failed tags fetch.
 type tagsErrMsg struct {
+	err error
+}
+
+// taskbooksLoadedMsg carries the distinct, sorted taskbook names and counts.
+type taskbooksLoadedMsg struct {
+	taskbooks []string
+	counts    taskbooks.Counts
+}
+
+// taskbooksErrMsg carries the error from a failed taskbooks fetch.
+type taskbooksErrMsg struct {
 	err error
 }
 
@@ -663,6 +688,18 @@ type taskProjectErrMsg struct {
 	err error
 }
 
+// taskTaskbookSetMsg carries the result of a successful SetTaskbook call,
+// plus the undo.Action that reverses it.
+type taskTaskbookSetMsg struct {
+	id     int
+	action undo.Action
+}
+
+// taskTaskbookErrMsg carries the error from a failed SetTaskbook call.
+type taskTaskbookErrMsg struct {
+	err error
+}
+
 // taskReorderedMsg carries the result of a successful manual-reorder
 // SetUrgencyOffset call, plus the undo.Action that reverses it (see
 // reorderTask) and the id of the task whose rank changed, so the cursor
@@ -801,6 +838,7 @@ type model struct {
 	reranker         TaskReRanker
 	duer             TaskDueSetter
 	projecter        TaskProjectSetter
+	taskbooker       TaskTaskbookSetter
 	annotator        TaskAnnotator
 	syncer           TaskFullSyncer
 	syncSecretFile   string
@@ -834,27 +872,34 @@ type model struct {
 	tagAssignPicker  tags.Model
 	tagAssignTyping  bool
 	tagAssignInput   addform.Model
-	reassigning      bool
-	reassignPicker   projects.Model
-	reassignTyping   bool
-	reassignInput    addform.Model
-	searching        bool
-	searchInput      textinput.Model
-	searchScope      searchScope
-	popups           popup.Model
-	showingHelp      bool
-	helpScroll       int
-	quitting         bool
-	pendingFocusID   int
-	focus            panelFocus
-	width            int
-	height           int
-	projects         projects.Model
-	filter           filterState
-	knownProjects    map[string]struct{}
-	tags             tags.Model
-	knownTags        map[string]struct{}
-	undo             undo.Stack
+	reassigning          bool
+	reassignPicker       projects.Model
+	reassignTyping       bool
+	reassignInput        addform.Model
+	pickingTaskbook      bool
+	taskbookPicker       taskbooks.Model
+	assigningTaskbook    bool
+	taskbookAssignPicker taskbooks.Model
+	taskbookAssignTyping bool
+	taskbookAssignInput  addform.Model
+	searching            bool
+	searchInput          textinput.Model
+	searchScope          searchScope
+	popups               popup.Model
+	showingHelp          bool
+	helpScroll           int
+	quitting             bool
+	pendingFocusID       int
+	focus                panelFocus
+	width                int
+	height               int
+	projects             projects.Model
+	filter               filterState
+	knownProjects        map[string]struct{}
+	tags                 tags.Model
+	knownTags            map[string]struct{}
+	knownTaskbooks       map[string]struct{}
+	undo                 undo.Stack
 }
 
 // initialModel constructs the app's starting state, including restoring
@@ -914,22 +959,26 @@ func initialModel() model {
 		tagger:           client,
 		reranker:         client,
 		duer:             client,
-		projecter:        client,
-		annotator:        client,
-		syncer:           client,
-		syncSecretFile:   syncSecretFile,
-		autoSyncInterval: autoSyncInterval,
-		list:             tasklist.New(nil).SetFocused(true),
-		add:              taskform.New(),
-		datePick:         datepick.New(),
-		projects:         projects.New(),
-		projectPicker:    projects.New(),
-		tagPicker:        tags.New(),
-		reassignPicker:   projects.New(),
-		knownProjects:    make(map[string]struct{}),
-		tags:             tags.New(),
-		knownTags:        make(map[string]struct{}),
-		filter:           filterState{project: persisted.Project, tag: persisted.Tag},
+		projecter:            client,
+		taskbooker:           client,
+		annotator:            client,
+		syncer:               client,
+		syncSecretFile:       syncSecretFile,
+		autoSyncInterval:     autoSyncInterval,
+		list:                 tasklist.New(nil).SetFocused(true),
+		add:                  taskform.New(),
+		datePick:             datepick.New(),
+		projects:             projects.New(),
+		projectPicker:        projects.New(),
+		tagPicker:            tags.New(),
+		reassignPicker:       projects.New(),
+		taskbookPicker:       taskbooks.New(),
+		taskbookAssignPicker: taskbooks.New(),
+		knownProjects:        make(map[string]struct{}),
+		tags:                 tags.New(),
+		knownTags:            make(map[string]struct{}),
+		knownTaskbooks:       make(map[string]struct{}),
+		filter:               filterState{project: persisted.Project, tag: persisted.Tag, taskbook: persisted.Taskbook},
 	}
 }
 
@@ -1003,8 +1052,8 @@ func (m model) applyProjectSelection(label string) (model, tea.Cmd, bool) {
 	m.filter = newFilter
 	m.tags = m.tags.SelectLabel(tags.AnyLabel)
 	cmd := tea.Batch(
-		fetchTasks(m.reader, m.taskFilters()...),
-		fetchTags(m.reader, m.filter.projectOnlyFilter()),
+		m.fetchTasks(),
+		m.fetchTags(),
 		saveFilter(m.filter),
 	)
 	return m, cmd, true
@@ -1123,16 +1172,18 @@ type suggestedTasksLoadedMsg struct {
 	tasks []taskwarrior.Task
 }
 
-// fetchSuggestedTasks loads all pending tasks for the Suggested bar. The
-// Tasks panel's own list is filtered, so it can't be reused. Failures are
-// dropped: the bar keeps its previous suggestion rather than popping up an
-// error for a secondary display. A nil reader yields no command.
-func fetchSuggestedTasks(reader TaskReader) tea.Cmd {
+// fetchSuggestedTasks loads all pending tasks for the Suggested bar scoped to
+// any active taskbook filter. The Tasks panel's own list is filtered, so it
+// can't be reused. Failures are dropped: the bar keeps its previous suggestion
+// rather than popping up an error for a secondary display. A nil reader yields
+// no command.
+func fetchSuggestedTasks(reader TaskReader, taskbookFilters ...string) tea.Cmd {
 	if reader == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		tasks, err := reader.Export(context.Background(), "status:pending")
+		filters := append([]string{"status:pending"}, taskbookFilters...)
+		tasks, err := reader.Export(context.Background(), filters...)
 		if err != nil {
 			return nil
 		}
@@ -1241,19 +1292,25 @@ func (m model) taskFilters() []string {
 	return append([]string{m.list.StatusFilter()}, m.filter.taskFilterArgs()...)
 }
 
+func (m model) fetchTasks() tea.Cmd { return fetchTasks(m.reader, m.taskFilters()...) }
+func (m model) fetchSuggestedTasks() tea.Cmd {
+	return fetchSuggestedTasks(m.reader, m.filter.taskbookFilterArgs()...)
+}
+func (m model) fetchProjects() tea.Cmd { return fetchProjects(m.reader, m.filter.taskbookFilterArgs()...) }
+func (m model) fetchTags() tea.Cmd {
+	return fetchTags(m.reader, m.filter.projectOnlyFilter(), m.filter.taskbookFilterArgs()...)
+}
+func (m model) fetchTaskbooks() tea.Cmd { return fetchTaskbooks(m.reader) }
+
 // fetchProjects returns a tea.Cmd that loads the distinct project names
-// across pending tasks only. This deliberately ignores whatever status tab
-// or project filter the Tasks panel currently has applied: otherwise
-// applying a project filter would shrink the very list used to change/clear
-// that filter. Projects that have gone to zero pending tasks (all done or
-// deleted) are handled by the caller merging this result into the
-// session's previously-seen project set, rather than by including
-// completed/deleted tasks here — that way a project a user never actually
-// worked with this session (all tasks already done before launch) doesn't
-// reappear just because it's still in taskwarrior's history.
-func fetchProjects(reader TaskReader) tea.Cmd {
+// across pending tasks scoped to taskbookFilters (if any). This deliberately
+// ignores whatever status tab or project filter the Tasks panel currently has
+// applied: otherwise applying a project filter would shrink the very list used
+// to change/clear that filter.
+func fetchProjects(reader TaskReader, taskbookFilters ...string) tea.Cmd {
 	return func() tea.Msg {
-		tasks, err := reader.Export(context.Background(), "status:pending")
+		filters := append([]string{"status:pending"}, taskbookFilters...)
+		tasks, err := reader.Export(context.Background(), filters...)
 		if err != nil {
 			return projectsErrMsg{err: err}
 		}
@@ -1262,19 +1319,20 @@ func fetchProjects(reader TaskReader) tea.Cmd {
 }
 
 // fetchTags returns a tea.Cmd that loads the distinct tags across pending
-// tasks scoped to projectFilter (a "project:<name>" fragment, or "" for no
-// project scoping — see filterState.projectOnlyFilter). It deliberately
+// tasks scoped to projectFilter and taskbookFilters (if any). It deliberately
 // ignores any currently selected tag filter, for the same reason
 // fetchProjects ignores the project filter: applying a tag filter must not
 // shrink the very list used to change/clear that filter. Scoping to the
-// active project, however, is intentional — the Tags panel is meant to
-// show only the tags relevant to whatever project is currently selected.
-func fetchTags(reader TaskReader, projectFilter string) tea.Cmd {
+// active project and taskbook, however, is intentional — the Tags panel is
+// meant to show only the tags relevant to whatever project and taskbook are
+// currently selected.
+func fetchTags(reader TaskReader, projectFilter string, taskbookFilters ...string) tea.Cmd {
 	return func() tea.Msg {
 		filters := []string{"status:pending"}
 		if projectFilter != "" {
 			filters = append(filters, projectFilter)
 		}
+		filters = append(filters, taskbookFilters...)
 		exported, err := reader.Export(context.Background(), filters...)
 		if err != nil {
 			return tagsErrMsg{err: err}
@@ -1283,17 +1341,82 @@ func fetchTags(reader TaskReader, projectFilter string) tea.Cmd {
 	}
 }
 
-// saveFilter returns a tea.Cmd that persists f's project and tag filter to
+// saveFilter returns a tea.Cmd that persists f's project, tag, and taskbook filter to
 // disk (see internal/config) so it's restored on the next app launch. On
 // failure it reports a filterSaveErrMsg rather than blocking or reverting
 // the (already-applied) in-memory filter change.
 func saveFilter(f filterState) tea.Cmd {
 	return func() tea.Msg {
-		if err := config.Save(config.State{Project: f.project, Tag: f.tag}); err != nil {
+		if err := config.Save(config.State{Project: f.project, Tag: f.tag, Taskbook: f.taskbook}); err != nil {
 			return filterSaveErrMsg{err: err}
 		}
 		return nil
 	}
+}
+
+// fetchTaskbooks returns a tea.Cmd that loads the distinct taskbook names
+// across pending tasks.
+func fetchTaskbooks(reader TaskReader) tea.Cmd {
+	return func() tea.Msg {
+		tasks, err := reader.Export(context.Background(), "status:pending")
+		if err != nil {
+			return taskbooksErrMsg{err: err}
+		}
+		return taskbooksLoadedMsg{taskbooks: distinctTaskbooks(tasks), counts: taskbookCounts(tasks)}
+	}
+}
+
+// taskbookCounts tallies pending ("todo") task counts per taskbook, plus
+// totals for the AllLabel and InboxLabel entries.
+func taskbookCounts(tasks []taskwarrior.Task) taskbooks.Counts {
+	c := taskbooks.Counts{ByTaskbook: make(map[string]int)}
+	for _, t := range tasks {
+		if t.Status != "pending" {
+			continue
+		}
+		c.All++
+		if t.Taskbook == "" {
+			c.Unscoped++
+			continue
+		}
+		c.ByTaskbook[t.Taskbook]++
+	}
+	return c
+}
+
+// distinctTaskbooks returns the sorted set of distinct taskbook names found across tasks.
+func distinctTaskbooks(tasks []taskwarrior.Task) []string {
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, t := range tasks {
+		if t.Taskbook == "" {
+			continue
+		}
+		if _, ok := seen[t.Taskbook]; ok {
+			continue
+		}
+		seen[t.Taskbook] = struct{}{}
+		names = append(names, t.Taskbook)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// mergeKnownTaskbooks folds newly-seen taskbook names into the session's
+// running set of known taskbooks and returns the sorted union.
+func (m *model) mergeKnownTaskbooks(names []string) []string {
+	if m.knownTaskbooks == nil {
+		m.knownTaskbooks = make(map[string]struct{})
+	}
+	for _, n := range names {
+		m.knownTaskbooks[n] = struct{}{}
+	}
+	merged := make([]string, 0, len(m.knownTaskbooks))
+	for n := range m.knownTaskbooks {
+		merged = append(merged, n)
+	}
+	sort.Strings(merged)
+	return merged
 }
 
 // projectCounts tallies pending ("todo") task counts per project, plus
@@ -1846,6 +1969,29 @@ func setProjectTask(projecter TaskProjectSetter, task taskwarrior.Task, project 
 	}
 }
 
+// setTaskbookTask returns a tea.Cmd that reassigns task's taskbook to
+// taskbook (a real taskbook name, or "" to clear it back to inbox)
+// via taskbooker, returning an undo.Action that reverses it back to the
+// task's prior taskbook.
+func setTaskbookTask(taskbooker TaskTaskbookSetter, task taskwarrior.Task, taskbook string) tea.Cmd {
+	return func() tea.Msg {
+		id := taskID(task)
+		prior := task.Taskbook
+		if err := taskbooker.SetTaskbook(context.Background(), id, taskbook); err != nil {
+			return taskTaskbookErrMsg{err: err}
+		}
+		return taskTaskbookSetMsg{id: task.ID, action: undo.Action{
+			Description: fmt.Sprintf("set task %s taskbook to %q", id, taskbook),
+			Undo: func() error {
+				return taskbooker.SetTaskbook(context.Background(), id, prior)
+			},
+			Redo: func() error {
+				return taskbooker.SetTaskbook(context.Background(), id, taskbook)
+			},
+		}}
+	}
+}
+
 // tagChanges returns the tags to add to and remove from a task currently
 // carrying current so that it ends up with exactly want, each in the order
 // they appear in want (add) or current (remove).
@@ -2146,9 +2292,10 @@ func renameProject(reader TaskReader, importer TaskImporter, from, to string) te
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		fetchTasks(m.reader, m.taskFilters()...),
-		fetchProjects(m.reader),
-		fetchTags(m.reader, m.filter.projectOnlyFilter()),
+		m.fetchTasks(),
+		m.fetchProjects(),
+		m.fetchTags(),
+		m.fetchTaskbooks(),
 	}
 	if m.syncer != nil && m.autoSyncInterval > 0 {
 		cmds = append(cmds, autoSyncTick(m.autoSyncInterval))
@@ -2220,6 +2367,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.reassignTyping {
 		return m.updateReassignTyping(msg)
 	}
+	if m.pickingTaskbook {
+		return m.updateTaskbookPicking(msg)
+	}
+	if m.assigningTaskbook {
+		return m.updateTaskbookAssigning(msg)
+	}
+	if m.taskbookAssignTyping {
+		return m.updateTaskbookAssignTyping(msg)
+	}
 	if m.searching {
 		return m.updateSearching(msg)
 	}
@@ -2272,6 +2428,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.add = m.add.SetProject(*m.filter.project)
 			}
 			return m, m.add.Init()
+		case "b":
+			w, h := projectPickerSize(len(m.taskbookPicker.Taskbooks()) + 2)
+			m.taskbookPicker = m.taskbookPicker.SetFocused(true).SetTitle("Taskbook Filter")
+			m.taskbookPicker = m.taskbookPicker.SelectLabel(m.filter.taskbookLabel())
+			var cmd tea.Cmd
+			m.taskbookPicker, cmd = m.taskbookPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
+			m.pickingTaskbook = true
+			return m, cmd
 		case "u":
 			act, ok := m.undo.Undo()
 			if !ok {
@@ -2398,10 +2562,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "[":
 			m.list = m.list.PrevStatus()
-			return m, fetchTasks(m.reader, m.taskFilters()...)
+			return m, m.fetchTasks()
 		case "]":
 			m.list = m.list.NextStatus()
-			return m, fetchTasks(m.reader, m.taskFilters()...)
+			return m, m.fetchTasks()
 		case "d":
 			// A Done task is already done; there's nothing to confirm.
 			if m.list.Status() == tasklist.TabDone {
@@ -2496,6 +2660,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			return m, nil
+		case "B":
+			if task, ok := m.list.Selected(); ok {
+				w, h := projectPickerSize(len(m.taskbookPicker.Taskbooks()) + 2)
+				m.taskbookAssignPicker = m.taskbookPicker.SetFocused(true).SetTitle("Assign Taskbook").SetReassignMode(true)
+				curLabel := task.Taskbook
+				if curLabel == "" {
+					curLabel = taskbooks.NoneLabel
+				}
+				m.taskbookAssignPicker = m.taskbookAssignPicker.SelectLabel(curLabel)
+				var cmd tea.Cmd
+				m.taskbookAssignPicker, cmd = m.taskbookAssignPicker.Update(tea.WindowSizeMsg{Width: w, Height: h})
+				m.assigningTaskbook = true
+				return m, cmd
+			}
+			return m, nil
 		case "ctrl+j":
 			if task, ok := m.list.Selected(); ok {
 				if neighbor, ok := m.list.Neighbor(1); ok {
@@ -2545,7 +2724,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list = m.list.SelectID(m.pendingFocusID)
 			m.pendingFocusID = 0
 		}
-		return m, fetchSuggestedTasks(m.reader)
+		return m, m.fetchSuggestedTasks()
 	case suggestedTasksLoadedMsg:
 		oldHeight := m.suggestedPanelHeight()
 		m.suggestedTasks = msg.tasks
@@ -2582,7 +2761,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if newM, cmd, changed := m.applyProjectSelection(projects.AllLabel); changed {
 				return newM, cmd
 			}
-			return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+			return m, tea.Batch(m.fetchTasks(), saveFilter(m.filter))
 		}
 		m.projects = m.projects.SelectLabel(label)
 		return m, nil
@@ -2599,113 +2778,141 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// task query agree.
 			m.filter.tag = nil
 			m.tags = m.tags.SelectLabel(tags.AnyLabel)
-			return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+			return m, tea.Batch(m.fetchTasks(), saveFilter(m.filter))
 		}
 		m.tags = m.tags.SelectLabel(label)
 		return m, nil
 	case tagsErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
+	case taskbooksLoadedMsg:
+		merged := m.mergeKnownTaskbooks(msg.taskbooks)
+		m.taskbookPicker = m.taskbookPicker.SetTaskbooks(merged).SetCounts(msg.counts)
+		m.taskbookAssignPicker = m.taskbookAssignPicker.SetTaskbooks(merged).SetCounts(msg.counts)
+		label := m.filter.taskbookLabel()
+		if !m.taskbookPicker.HasLabel(label) {
+			m.filter.taskbook = nil
+			m.taskbookPicker = m.taskbookPicker.SelectLabel(taskbooks.AllLabel)
+			m.knownProjects = nil
+			m.knownTags = nil
+			m.filter.project = nil
+			m.filter.tag = nil
+			m.projects = m.projects.SelectLabel(projects.AllLabel)
+			m.tags = m.tags.SelectLabel(tags.AnyLabel)
+			return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), saveFilter(m.filter))
+		}
+		m.taskbookPicker = m.taskbookPicker.SelectLabel(label)
+		return m, nil
+	case taskbooksErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
 	case taskAddedMsg:
 		m.add = m.add.Reset()
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskAddErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDoneMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskDoneErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDeletedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskRestoredMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskRestoreErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPurgedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case tasksPurgedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case tasksPurgeErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case tasksDeletedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case tasksDeleteErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskToggledMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.scheduleMutationAutoSync())
 	case taskToggleErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskTagsSetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskTagsErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskPrioritySetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskPriorityErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskDueSetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskDueErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskProjectSetMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskProjectErrMsg:
+		m.popups = m.popups.Push(errPopup(msg.err))
+		return m, nil
+	case taskTaskbookSetMsg:
+		m.undo.Push(msg.action)
+		m.pendingFocusID = msg.id
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
+	case taskTaskbookErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskReorderedMsg:
 		m.undo.Push(msg.action)
 		m.pendingFocusID = msg.id
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.scheduleMutationAutoSync())
 	case taskReorderErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case undoAppliedMsg:
 		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Undo: " + msg.description})
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks())
 	case undoErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case redoAppliedMsg:
 		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Redo: " + msg.description})
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks())
 	case redoErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
 	case taskSyncedMsg:
 		m.popups = m.popups.Push(popup.Message{Severity: popup.Info, Text: "Sync complete"})
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks())
 	case taskSyncErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -2720,7 +2927,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case autoSyncedMsg:
 		m.lastAutoSyncErr = nil
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()))
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks())
 	case autoSyncErrMsg:
 		m.lastAutoSyncErr = msg.err
 		return m, nil
@@ -2735,7 +2942,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, runAutoSync(m.syncer, m.syncSecretFile)
 	case taskEditedMsg:
 		m.undo.Push(msg.action)
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), m.scheduleMutationAutoSync())
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), m.scheduleMutationAutoSync())
 	case taskEditErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -2747,7 +2954,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filter = newFilter
 		m.renameFrom = ""
 		m.renameTo = ""
-		return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), fetchProjects(m.reader), fetchTags(m.reader, m.filter.projectOnlyFilter()), saveFilter(m.filter))
+		return m, tea.Batch(m.fetchTasks(), m.fetchProjects(), m.fetchTags(), m.fetchTaskbooks(), saveFilter(m.filter))
 	case projectRenameErrMsg:
 		m.popups = m.popups.Push(errPopup(msg.err))
 		return m, nil
@@ -2977,6 +3184,9 @@ func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
 				priority = "M"
 			}
 			var extraArgs []string
+			if m.filter.taskbook != nil && *m.filter.taskbook != "" {
+				extraArgs = append(extraArgs, "taskbook:"+*m.filter.taskbook)
+			}
 			if project := strings.TrimSpace(m.add.Project()); project != "" {
 				extraArgs = append(extraArgs, "project:"+project)
 			}
@@ -3406,6 +3616,156 @@ func (m model) updateReassignTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateTaskbookPicking handles messages while the quick taskbook-filter
+// popup (opened via "b") is active.
+func (m model) updateTaskbookPicking(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.searching {
+		return m.updateSearching(msg)
+	}
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "/":
+			var cmd tea.Cmd
+			m, cmd = m.startSearch("search taskbooks...", searchScopeTaskbookPicker)
+			return m, cmd
+		case "n":
+			if newPicker, ok := m.taskbookPicker.NextMatch(); ok {
+				m.taskbookPicker = newPicker
+			}
+			return m, nil
+		case "N":
+			if newPicker, ok := m.taskbookPicker.PrevMatch(); ok {
+				m.taskbookPicker = newPicker
+			}
+			return m, nil
+		case "esc":
+			if m.taskbookPicker.HasActiveSearch() {
+				m.taskbookPicker = m.taskbookPicker.ClearSearch()
+				return m, nil
+			}
+			m.pickingTaskbook = false
+			return m, nil
+		case "enter":
+			m.pickingTaskbook = false
+			label, ok := m.taskbookPicker.Selected()
+			if !ok {
+				return m, nil
+			}
+			newFilter := m.filter.withTaskbookSelection(label)
+			if newFilter.equal(m.filter) {
+				return m, nil
+			}
+			m.filter = newFilter
+			m.knownProjects = nil
+			m.knownTags = nil
+			m.filter.project = nil
+			m.filter.tag = nil
+			m.projects = m.projects.SelectLabel(projects.AllLabel)
+			m.tags = m.tags.SelectLabel(tags.AnyLabel)
+			return m, tea.Batch(
+				m.fetchTasks(),
+				m.fetchProjects(),
+				m.fetchTags(),
+				saveFilter(m.filter),
+			)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.taskbookPicker, cmd = m.taskbookPicker.Update(msg)
+	return m, cmd
+}
+
+// updateTaskbookAssigning handles messages while the task taskbook-assign
+// popup (opened via "B" from the Tasks panel) is active.
+func (m model) updateTaskbookAssigning(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.searching {
+		return m.updateSearching(msg)
+	}
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "/":
+			var cmd tea.Cmd
+			m, cmd = m.startSearch("search taskbooks...", searchScopeTaskbookAssignPicker)
+			return m, cmd
+		case "n":
+			if newPicker, ok := m.taskbookAssignPicker.NextMatch(); ok {
+				m.taskbookAssignPicker = newPicker
+			}
+			return m, nil
+		case "N":
+			if newPicker, ok := m.taskbookAssignPicker.PrevMatch(); ok {
+				m.taskbookAssignPicker = newPicker
+			}
+			return m, nil
+		case "esc":
+			if m.taskbookAssignPicker.HasActiveSearch() {
+				m.taskbookAssignPicker = m.taskbookAssignPicker.ClearSearch()
+				return m, nil
+			}
+			m.assigningTaskbook = false
+			return m, nil
+		case "enter":
+			label, ok := m.taskbookAssignPicker.Selected()
+			if !ok {
+				return m, nil
+			}
+			if label == taskbooks.NewTaskbookLabel {
+				m.assigningTaskbook = false
+				m.taskbookAssignTyping = true
+				m.taskbookAssignInput = addform.NewNamed("Assign Taskbook", "<enter> to assign, <esc> to cancel", "New taskbook name...").Focus()
+				return m, m.taskbookAssignInput.Init()
+			}
+			m.assigningTaskbook = false
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			book := label
+			if label == taskbooks.NoneLabel {
+				book = ""
+			}
+			return m, setTaskbookTask(m.taskbooker, task, book)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.taskbookAssignPicker, cmd = m.taskbookAssignPicker.Update(msg)
+	return m, cmd
+}
+
+// updateTaskbookAssignTyping handles messages while the "key in a new taskbook
+// name" input (reached via NewTaskbookLabel in updateTaskbookAssigning) is focused.
+func (m model) updateTaskbookAssignTyping(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc":
+			m.taskbookAssignTyping = false
+			m.taskbookAssignInput = m.taskbookAssignInput.Blur()
+			return m, nil
+		case "enter":
+			book := strings.TrimSpace(m.taskbookAssignInput.Value())
+			m.taskbookAssignTyping = false
+			m.taskbookAssignInput = m.taskbookAssignInput.Blur()
+			if book == "" {
+				return m, nil
+			}
+			task, ok := m.list.Selected()
+			if !ok {
+				return m, nil
+			}
+			return m, setTaskbookTask(m.taskbooker, task, book)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.taskbookAssignInput, cmd = m.taskbookAssignInput.Update(msg)
+	return m, cmd
+}
+
 // startSearch begins a "/" search prompt targeting scope (the Tasks panel,
 // Projects panel, or "p" quick project-filter popup — see searchScope),
 // focusing a fresh textinput.Model with placeholder as its hint text. The
@@ -3499,7 +3859,7 @@ func (m model) afterTagsCursorMove() (model, tea.Cmd) {
 		return m, nil
 	}
 	m.filter = newFilter
-	return m, tea.Batch(fetchTasks(m.reader, m.taskFilters()...), saveFilter(m.filter))
+	return m, tea.Batch(m.fetchTasks(), saveFilter(m.filter))
 }
 
 // applySearch commits query as the active search against whichever list
@@ -3514,6 +3874,10 @@ func (m *model) applySearch(query string) {
 		m.tags, _ = m.tags.Search(query)
 	case searchScopeTagPicker:
 		m.tagPicker, _ = m.tagPicker.Search(query)
+	case searchScopeTaskbookPicker:
+		m.taskbookPicker, _ = m.taskbookPicker.Search(query)
+	case searchScopeTaskbookAssignPicker:
+		m.taskbookAssignPicker, _ = m.taskbookAssignPicker.Search(query)
 	default:
 		m.list, _ = m.list.Search(query)
 	}
@@ -3531,6 +3895,10 @@ func (m *model) clearSearch() {
 		m.tags = m.tags.ClearSearch()
 	case searchScopeTagPicker:
 		m.tagPicker = m.tagPicker.ClearSearch()
+	case searchScopeTaskbookPicker:
+		m.taskbookPicker = m.taskbookPicker.ClearSearch()
+	case searchScopeTaskbookAssignPicker:
+		m.taskbookAssignPicker = m.taskbookAssignPicker.ClearSearch()
 	default:
 		m.list = m.list.ClearSearch()
 	}
@@ -3570,7 +3938,7 @@ func (m model) baseView() string {
 	if m.searching {
 		view += "\n" + m.searchInput.View()
 	} else {
-		line := statusbar.Render(m.statusBindings())
+		line := statusbar.RenderWithBook(m.filter.taskbookLabel(), m.statusBindings())
 		if m.lastAutoSyncErr != nil {
 			line += "  " + autoSyncErrStyle.Render(fmt.Sprintf("⚠ auto-sync failed: %v", m.lastAutoSyncErr))
 		}

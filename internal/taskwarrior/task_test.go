@@ -53,6 +53,20 @@ func TestParseTasks(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:  "task with taskbook",
+			input: []byte(`[{"id":2,"uuid":"u2","description":"Write tests","status":"pending","taskbook":"work"}]`),
+			wantTasks: []Task{
+				{
+					ID:          2,
+					UUID:        "u2",
+					Description: "Write tests",
+					Status:      "pending",
+					Taskbook:    "work",
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name:  "task with annotations",
 			input: []byte(`[{"id":3,"uuid":"u3","description":"Ship release","status":"pending","annotations":[{"entry":"20260916T120000Z","description":"Waiting on QA sign-off"},{"entry":"20260917T090000Z","description":"Multi-line note\nsecond line"}]}]`),
 			wantTasks: []Task{

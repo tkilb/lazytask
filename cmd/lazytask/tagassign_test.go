@@ -298,7 +298,7 @@ func TestTAssign_SetMsgRecordsUndoAndRefreshesTasksAndTags(t *testing.T) {
 	m = nm.(model)
 	require.NotNil(t, refresh)
 	runBatch(refresh)
-	assert.Equal(t, 3, reader.calls, "tasks, projects and tags are refetched")
+	assert.Equal(t, 4, reader.calls, "tasks, projects, tags and taskbooks are refetched")
 	assert.Equal(t, 1, m.pendingFocusID, "cursor stays on the edited task")
 	assert.True(t, m.undo.CanUndo())
 

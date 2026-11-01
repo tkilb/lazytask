@@ -118,6 +118,14 @@ func (m model) clickPickerRow(kind modalKind, y int) (tea.Model, tea.Cmd, bool) 
 		if i, ok := m.reassignPicker.RowAt(y); ok {
 			m.reassignPicker, picked = m.reassignPicker.SelectIndex(i), true
 		}
+	case m.pickingTaskbook:
+		if i, ok := m.taskbookPicker.RowAt(y); ok {
+			m.taskbookPicker, picked = m.taskbookPicker.SelectIndex(i), true
+		}
+	case m.assigningTaskbook:
+		if i, ok := m.taskbookAssignPicker.RowAt(y); ok {
+			m.taskbookAssignPicker, picked = m.taskbookAssignPicker.SelectIndex(i), true
+		}
 	case m.assigningTags:
 		if i, ok := m.tagAssignPicker.RowAt(y); ok {
 			m.tagAssignPicker, picked = m.tagAssignPicker.SelectIndex(i), true

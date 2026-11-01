@@ -1,6 +1,7 @@
 package editbuffer
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,7 @@ func TestSerializeParseRoundTrip(t *testing.T) {
 		Description: "Buy milk",
 		Status:      "pending",
 		Project:     "home",
+		Taskbook:    "work",
 		Priority:    "H",
 		Due:         "20250101T000000Z",
 		Entry:       "20241201T000000Z",
@@ -53,6 +55,7 @@ func TestSerializeParseRoundTrip(t *testing.T) {
 
 	assert.Equal(t, task.Description, fields.Description)
 	assert.Equal(t, task.Project, fields.Project)
+	assert.Equal(t, task.Taskbook, fields.Taskbook)
 	assert.Equal(t, task.Priority, fields.Priority)
 	assert.Equal(t, []string{"call the store", "2% milk"}, fields.Annotations)
 	// The Due field is round-tripped through its human-friendly
@@ -380,4 +383,19 @@ func TestSerialize_ContainsReadOnlyReferenceSection(t *testing.T) {
 	assert.Contains(t, buf, "End: end-ts")
 	assert.Contains(t, buf, "Urgency: 1")
 	assert.Contains(t, buf, "UrgencyOffset: 2.5")
+}
+
+func TestSerialize_TaskbookIsLastEditableField(t *testing.T) {
+	task := taskwarrior.Task{Description: "Test", Taskbook: "personal"}
+	buf := Serialize(task)
+	lines := strings.Split(buf, "\n")
+	dividerIdx := -1
+	for i, l := range lines {
+		if l == "---" {
+			dividerIdx = i
+			break
+		}
+	}
+	require.True(t, dividerIdx > 0)
+	assert.Equal(t, "Taskbook: personal", lines[dividerIdx-1])
 }

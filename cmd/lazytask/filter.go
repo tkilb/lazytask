@@ -3,12 +3,18 @@ package main
 import (
 	"github.com/tkilb/lazytask/internal/ui/projects"
 	"github.com/tkilb/lazytask/internal/ui/tags"
+	"github.com/tkilb/lazytask/internal/ui/taskbooks"
 )
 
-// filterState holds the cross-panel task filter selected via the Projects
-// and Tags panels. It is deliberately kept separate from tasklist.Model's
-// status-tab state, since project/tag filtering is orthogonal to which
-// status tab is active.
+// filterState holds the cross-panel task filter selected via the Projects,
+// Tags, and Taskbooks selectors. It is deliberately kept separate from
+// tasklist.Model's status-tab state, since filtering is orthogonal to
+// which status tab is active.
+//
+// taskbook is a tri-state: nil means no taskbook filter is applied
+// (taskbooks.AllLabel), a pointer to "" means only inbox tasks with no taskbook
+// (taskbooks.InboxLabel), and any other pointer value filters to that
+// specific taskbook name.
 //
 // project is a tri-state: nil means no project filter is applied
 // (projects.AllLabel), a pointer to "" means only tasks with no project at
@@ -20,17 +26,28 @@ import (
 // is no "(none)" equivalent — the requirement only calls for an (any)
 // entry plus the real tags.
 type filterState struct {
-	project *string
-	tag     *string
+	project  *string
+	tag      *string
+	taskbook *string
+}
+
+// taskbookFilterArgs returns the `task export` filter fragments for the
+// currently selected taskbook, including non-scoped tasks (taskbook.none:),
+// or nil if no taskbook filter is active.
+func (f filterState) taskbookFilterArgs() []string {
+	if f.taskbook != nil && *f.taskbook != "" {
+		return []string{"(", "taskbook:" + *f.taskbook, "or", "taskbook.none:", ")"}
+	}
+	return nil
 }
 
 // taskFilterArgs returns the `task export` filter fragments for the
-// currently selected project and tag, one argument each (taskwarrior ANDs
-// separate arguments, but treats a single argument containing a space as
-// one unparsed word, so they must never be joined), or nil if neither
-// filter is applied.
+// currently selected taskbook, project, and tag. When scoped to a specific
+// taskbook, non-scoped tasks (taskbook.none:) are included so they show for all
+// books.
 func (f filterState) taskFilterArgs() []string {
 	var args []string
+	args = append(args, f.taskbookFilterArgs()...)
 	if f.project != nil {
 		args = append(args, "project:"+*f.project)
 	}
@@ -111,13 +128,33 @@ func (f filterState) tagLabel() string {
 	return *f.tag
 }
 
-// equal reports whether f and other select the same project and tag
-// filter. It exists because filterState.project/tag are *string, so
-// comparing filterState values with == compares pointer identity rather
-// than the underlying filter, which would spuriously treat every
-// navigation step as a change.
+// withTaskbookSelection returns a copy of f updated from whatever entry
+// label was selected (a taskbook name, or taskbooks.AllLabel).
+func (f filterState) withTaskbookSelection(label string) filterState {
+	if label == taskbooks.AllLabel {
+		f.taskbook = nil
+		return f
+	}
+	tb := label
+	f.taskbook = &tb
+	return f
+}
+
+// taskbookLabel returns the taskbook entry label corresponding to f's current
+// taskbook filter.
+func (f filterState) taskbookLabel() string {
+	if f.taskbook == nil || *f.taskbook == "" {
+		return taskbooks.AllLabel
+	}
+	return *f.taskbook
+}
+
+// equal reports whether f and other select the same taskbook, project, and tag
+// filter.
 func (f filterState) equal(other filterState) bool {
-	return stringPtrEqual(f.project, other.project) && stringPtrEqual(f.tag, other.tag)
+	return stringPtrEqual(f.project, other.project) &&
+		stringPtrEqual(f.tag, other.tag) &&
+		stringPtrEqual(f.taskbook, other.taskbook)
 }
 
 // stringPtrEqual reports whether a and b are both nil, or both non-nil and

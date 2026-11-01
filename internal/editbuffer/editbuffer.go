@@ -87,7 +87,7 @@ const displayDueLayout = "2006-01-02"
 // the order they're written by Serialize. Annotations is deliberately
 // excluded: it's a multi-line list section headed by annotationsHeader
 // rather than a single "Key: value" line, so it's parsed separately.
-var editableKeys = []string{"Description", "Project", "Tags", "Priority", "Due"}
+var editableKeys = []string{"Description", "Project", "Tags", "Priority", "Due", "Taskbook"}
 
 // EditableFields holds the subset of a Task's fields that are user-editable
 // via the buffer, as parsed back from edited buffer content.
@@ -95,6 +95,7 @@ type EditableFields struct {
 	Description string
 	Annotations []string
 	Project     string
+	Taskbook    string
 	Priority    string
 	Due         string
 	Tags        []string
@@ -118,6 +119,7 @@ func Serialize(t taskwarrior.Task) string {
 	fmt.Fprintf(&b, "Tags: %s\n", strings.Join(t.Tags, ", "))
 	fmt.Fprintf(&b, "Priority: %s\n", t.Priority)
 	fmt.Fprintf(&b, "Due: %s\n", displayDue(t.Due))
+	fmt.Fprintf(&b, "Taskbook: %s\n", t.Taskbook)
 	b.WriteString(divider + "\n")
 	fmt.Fprintf(&b, "ID: %d\n", t.ID)
 	fmt.Fprintf(&b, "UUID: %s\n", t.UUID)
@@ -174,6 +176,8 @@ func Parse(content string) (EditableFields, error) {
 				descLines = []string{value}
 			case "Project":
 				fields.Project = value
+			case "Taskbook":
+				fields.Taskbook = value
 			case "Priority":
 				fields.Priority = normalizePriority(value)
 			case "Due":
@@ -225,6 +229,7 @@ func Apply(original taskwarrior.Task, fields EditableFields) taskwarrior.Task {
 	updated := original
 	updated.Description = fields.Description
 	updated.Project = fields.Project
+	updated.Taskbook = fields.Taskbook
 	updated.Priority = fields.Priority
 	updated.Due = fields.Due
 	updated.Tags = fields.Tags

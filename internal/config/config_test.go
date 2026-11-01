@@ -67,6 +67,24 @@ func TestSaveLoadNoFilter(t *testing.T) {
 
 	got := Load()
 	assert.Nil(t, got.Project)
+	assert.Nil(t, got.Taskbook)
+}
+
+func TestSaveLoadTaskbook(t *testing.T) {
+	withTempStateFile(t)
+
+	tb := "work"
+	require.NoError(t, Save(State{Taskbook: &tb}))
+
+	got := Load()
+	require.NotNil(t, got.Taskbook)
+	assert.Equal(t, "work", *got.Taskbook)
+
+	empty := ""
+	require.NoError(t, Save(State{Taskbook: &empty}))
+	got = Load()
+	require.NotNil(t, got.Taskbook)
+	assert.Equal(t, "", *got.Taskbook)
 }
 
 // withTempAppConfigDir redirects appConfigPath() to a fresh per-test

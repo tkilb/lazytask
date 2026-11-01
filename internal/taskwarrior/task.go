@@ -29,6 +29,8 @@ type Task struct {
 	// added to Urgency to form the effective sort key. It has no meaning to
 	// Taskwarrior itself and defaults to 0 (no manual override).
 	UrgencyOffset float64 `json:"urgencyoffset,omitempty"`
+	// Taskbook is a string UDA representing the taskbook namespace (see Client.EnsureUDA).
+	Taskbook string `json:"taskbook,omitempty"`
 }
 
 // Annotation represents a single timestamped note attached to a task, as

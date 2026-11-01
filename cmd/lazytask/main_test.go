@@ -33,11 +33,13 @@ type stubReader struct {
 	err         error
 	calls       int
 	lastFilters []string
+	allFilters  [][]string
 }
 
 func (s *stubReader) Export(ctx context.Context, filters ...string) ([]taskwarrior.Task, error) {
 	s.calls++
 	s.lastFilters = filters
+	s.allFilters = append(s.allFilters, filters)
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -707,7 +709,7 @@ func TestModelUpdate_AddingTypeAndSubmit(t *testing.T) {
 	loaded, ok := findTasksLoaded(refreshMsg)
 	assert.True(t, ok)
 	assert.Equal(t, reader.tasks, loaded.tasks)
-	assert.Equal(t, 3, reader.calls) // one for tasks, one for the projects panel, one for the tags panel
+	assert.Equal(t, 4, reader.calls) // one for tasks, one for the projects panel, one for tags, one for taskbooks
 }
 
 // TestModelUpdate_AddingAutoAssignsSelectedProjectFilter verifies that
@@ -958,7 +960,7 @@ func TestModelUpdate_CompletingConfirmYDonesOnTodoTab(t *testing.T) {
 	refreshMsgs := runBatch(refreshCmd)
 	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
-	assert.Equal(t, 3, reader.calls, "expected a task refresh plus projects and tags refreshes (so counts stay in sync)")
+	assert.Equal(t, 4, reader.calls, "expected a task refresh plus projects, tags and taskbooks refreshes (so counts stay in sync)")
 }
 
 // TestModelUpdate_CompletingConfirmYRestoresThenDonesOnDeletedTab verifies
@@ -1267,7 +1269,7 @@ func TestModelUpdate_RestoringConfirmYRestoresOnDoneTab(t *testing.T) {
 	refreshMsgs := runBatch(refreshCmd)
 	_, ok = findTasksLoaded(refreshMsgs)
 	assert.True(t, ok)
-	assert.Equal(t, 3, reader.calls, "expected a task refresh plus projects and tags refreshes (so counts stay in sync)")
+	assert.Equal(t, 4, reader.calls, "expected a task refresh plus projects, tags and taskbooks refreshes (so counts stay in sync)")
 }
 
 func TestModelUpdate_RestoringConfirmYRestoresOnDeletedTab(t *testing.T) {

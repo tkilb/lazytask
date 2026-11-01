@@ -114,3 +114,24 @@ func TestModel_TaskFilters_ProjectAndTagAreSeparateExportArgs(t *testing.T) {
 
 	assert.Equal(t, []string{"status:pending", "project:My Project", "+urgent"}, m.taskFilters())
 }
+
+func TestFilterState_WithTaskbookSelection(t *testing.T) {
+	f := filterState{}
+
+	f = f.withTaskbookSelection("work")
+	wantWork := []string{"(", "taskbook:work", "or", "taskbook.none:", ")"}
+	if got := f.taskFilterArgs(); !slices.Equal(got, wantWork) {
+		t.Fatalf("after selecting 'work', taskFilterArgs() = %q, want %q", got, wantWork)
+	}
+	if got := f.taskbookLabel(); got != "work" {
+		t.Fatalf("taskbookLabel() = %q, want %q", got, "work")
+	}
+
+	f = f.withTaskbookSelection("(all)")
+	if got := f.taskFilterArgs(); len(got) != 0 {
+		t.Fatalf("after selecting (all), taskFilterArgs() = %q, want empty", got)
+	}
+	if got := f.taskbookLabel(); got != "(all)" {
+		t.Fatalf("taskbookLabel() = %q, want %q", got, "(all)")
+	}
+}

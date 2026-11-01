@@ -39,3 +39,13 @@ func TestRender_SingleBindingHasNoSeparator(t *testing.T) {
 	out := Render([]Binding{{Key: "q", Label: "quit"}})
 	assert.False(t, strings.Contains(out, separator))
 }
+
+func TestRenderWithBook(t *testing.T) {
+	out := RenderWithBook("work", []Binding{{Key: "q", Label: "quit"}})
+	assert.True(t, strings.Contains(out, "work"))
+	assert.False(t, strings.Contains(out, "[work]"))
+	assert.True(t, strings.Contains(out, "quit"))
+
+	outEmpty := RenderWithBook("", []Binding{{Key: "q", Label: "quit"}})
+	assert.False(t, strings.Contains(outEmpty, "work"))
+}
